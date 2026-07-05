@@ -26,7 +26,12 @@ This brick does not own:
 - desktop UI, installer, updater, or release manifest composition
 - Node, Python, browser, or rg binaries
 
-## CLI
+## Host Entrypoint
+
+`agent-tool` includes a command entrypoint so host launchers, release workflows,
+and local smoke tests can start or inspect the tool runtime. It is not a
+user-facing product CLI; the product-facing CLI is expected to be provided by
+the orchestrator brick.
 
 ```bash
 agent-tool version
@@ -98,7 +103,7 @@ npm install
 npm run release:local
 ```
 
-`release:local` covers CLI smoke, contract smoke, tool smoke, server smoke, artifact build, descriptor generation, placeholder publish, verification, and package shape.
+`release:local` covers command-entrypoint smoke, contract smoke, tool smoke, server smoke, artifact build, descriptor generation, placeholder publish, verification, and package shape.
 
 ## Artifact
 

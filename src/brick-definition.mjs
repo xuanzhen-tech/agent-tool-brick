@@ -80,7 +80,7 @@ export const brickDefinition = createBrickDefinition({
     {
       name: "agent-tool",
       type: "cli",
-      description: "CLI entry. Supports serve, health, diagnostics, manifest, call, and version commands."
+      description: "Host-facing command entrypoint. Supports serve, health, diagnostics, manifest, call, and version commands."
     },
     {
       name: "createAgentToolLaunchConfig",

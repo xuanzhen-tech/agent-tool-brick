@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 /**
- * agent-tool command-line entrypoint.
+ * agent-tool host-facing command entrypoint.
  *
- * The CLI starts the local tool service for orchestrators and also exposes
+ * This executable starts the local tool service for orchestrators and exposes
  * smoke-friendly one-shot commands for health, diagnostics, manifest, and
- * direct tool calls.
+ * direct tool calls. It is a brick control surface, not the product CLI.
  */
 
 import { once } from "node:events";
