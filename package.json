@@ -1,0 +1,47 @@
+{
+  "name": "@xuanzhen-tech/agent-tool-brick",
+  "version": "0.1.0",
+  "description": "Agent tool execution brick with a local tool service boundary.",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/xuanzhen-tech/agent-tool-brick.git"
+  },
+  "homepage": "https://github.com/xuanzhen-tech/agent-tool-brick#readme",
+  "bugs": {
+    "url": "https://github.com/xuanzhen-tech/agent-tool-brick/issues"
+  },
+  "exports": "./src/index.mjs",
+  "bin": {
+    "agent-tool": "./src/cli.mjs"
+  },
+  "files": [
+    "src/cli.mjs",
+    "src/index.mjs",
+    "src/brick-definition.mjs",
+    "src/main"
+  ],
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  },
+  "scripts": {
+    "build:artifact": "node src/scripts/build-artifact.mjs",
+    "create:descriptor": "node src/scripts/create-descriptor.mjs",
+    "pack:dry-run": "npm pack --dry-run",
+    "publish:artifact": "node src/scripts/publish-artifact.mjs",
+    "publish:artifact:placeholder": "node src/scripts/publish-artifact-placeholder.mjs",
+    "publish:npm": "npm publish",
+    "release:local": "npm run smoke:cli && npm run smoke:contract && npm run smoke:tools && npm run smoke:server && npm run build:artifact && npm run create:descriptor && npm run publish:artifact:placeholder && npm run verify && npm run pack:dry-run",
+    "smoke:cli": "node src/cli.mjs version && node src/cli.mjs health --json && node src/cli.mjs diagnostics --json && node src/cli.mjs manifest --json",
+    "smoke:contract": "node src/scripts/smoke-contract.mjs",
+    "smoke:server": "node src/scripts/smoke-server.mjs",
+    "smoke:tools": "node src/scripts/smoke-tools.mjs",
+    "verify": "node src/scripts/verify.mjs"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@xuanzhen-tech/agent-release-foundation": "0.0.4"
+  }
+}

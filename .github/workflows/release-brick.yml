@@ -1,0 +1,127 @@
+name: Release Brick
+
+on:
+  workflow_dispatch:
+    inputs:
+      artifact_mode:
+        description: "Runtime artifact publishing mode"
+        required: true
+        default: "placeholder"
+        type: choice
+        options:
+          - "skip"
+          - "placeholder"
+          - "oss"
+      publish_npm:
+        description: "Publish npm SDK package to GitHub Packages"
+        required: true
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://npm.pkg.github.com
+          scope: "@xuanzhen-tech"
+
+      - name: Install dependencies
+        run: npm ci
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.PACKAGES_READ_TOKEN }}
+
+      - name: Validate scripts
+        run: |
+          node --check src/index.mjs
+          node --check src/brick-definition.mjs
+          node --check src/cli.mjs
+          node --check src/main/diagnostics.mjs
+          node --check src/main/env.mjs
+          node --check src/main/launch-config.mjs
+          node --check src/main/process-runtime.mjs
+          node --check src/main/search-runtime.mjs
+          node --check src/main/server.mjs
+          node --check src/main/shell-runtime.mjs
+          node --check src/main/tool-contract.mjs
+          node --check src/main/tool-definitions.mjs
+          node --check src/main/tool-registry.mjs
+          node --check src/main/workspace.mjs
+          node --check src/scripts/build-artifact.mjs
+          node --check src/scripts/create-descriptor.mjs
+          node --check src/scripts/publish-artifact.mjs
+          node --check src/scripts/publish-artifact-placeholder.mjs
+          node --check src/scripts/smoke-contract.mjs
+          node --check src/scripts/smoke-server.mjs
+          node --check src/scripts/smoke-tools.mjs
+          node --check src/scripts/verify.mjs
+
+      - name: Smoke tests
+        run: |
+          npm run smoke:cli
+          npm run smoke:contract
+          npm run smoke:tools
+          npm run smoke:server
+
+      - name: Build runtime artifact
+        if: ${{ inputs.artifact_mode != 'skip' }}
+        run: npm run build:artifact
+
+      - name: Create local descriptor
+        if: ${{ inputs.artifact_mode != 'skip' }}
+        run: npm run create:descriptor
+
+      - name: Create OSS descriptor placeholder
+        if: ${{ inputs.artifact_mode == 'placeholder' }}
+        run: npm run publish:artifact:placeholder
+
+      - name: Publish runtime artifact to OSS
+        if: ${{ inputs.artifact_mode == 'oss' }}
+        run: npm run publish:artifact
+        env:
+          OSS_BUCKET: ${{ secrets.OSS_BUCKET }}
+          OSS_ENDPOINT: ${{ secrets.OSS_ENDPOINT }}
+          OSS_REGION: ${{ secrets.OSS_REGION }}
+          OSS_ACCESS_KEY_ID: ${{ secrets.OSS_ACCESS_KEY_ID }}
+          OSS_ACCESS_KEY_SECRET: ${{ secrets.OSS_ACCESS_KEY_SECRET }}
+          OSS_PUBLIC_BASE_URL: ${{ secrets.OSS_PUBLIC_BASE_URL }}
+          OSS_OBJECT_PREFIX: bricks
+          BRICK_NAMESPACE: tool
+
+      - name: Verify contract
+        run: npm run verify
+
+      - name: Verify npm package shape
+        run: npm run pack:dry-run
+
+      - name: Upload descriptor for host launcher consumption
+        if: ${{ inputs.artifact_mode != 'skip' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: brick-descriptor
+          if-no-files-found: ignore
+          path: |
+            dist/descriptor.oss.json
+            dist/descriptor.oss.placeholder.json
+            dist/build-artifact.json
+            dist/oss-objects.json
+
+      - name: Publish npm SDK package
+        if: ${{ inputs.publish_npm == 'true' }}
+        run: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
