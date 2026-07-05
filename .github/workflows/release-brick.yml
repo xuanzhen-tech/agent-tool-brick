@@ -57,10 +57,12 @@ jobs:
           node --check src/main/search-runtime.mjs
           node --check src/main/server.mjs
           node --check src/main/shell-runtime.mjs
+          node --check src/main/skill-runtime.mjs
           node --check src/main/tool-contract.mjs
           node --check src/main/tool-definitions.mjs
           node --check src/main/tool-registry.mjs
           node --check src/main/workspace.mjs
+          node --check src/main/web-runtime.mjs
           node --check src/scripts/build-artifact.mjs
           node --check src/scripts/create-descriptor.mjs
           node --check src/scripts/publish-artifact.mjs
