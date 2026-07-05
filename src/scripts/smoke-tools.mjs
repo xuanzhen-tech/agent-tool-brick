@@ -10,6 +10,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
+import { AgentTool } from "../index.mjs";
 import { resolveServiceConfig } from "../main/launch-config.mjs";
 import { isRgAvailable } from "../main/search-runtime.mjs";
 import { createToolRegistry } from "../main/tool-registry.mjs";
@@ -256,8 +257,37 @@ assert.equal(skillActivate.status, "completed");
 assert.equal(skillActivate.details.loadedSkill.name, "brief-writer");
 assert.match(skillActivate.details.loadedSkill.content, /Keep replies short/);
 
+const objectTool = new AgentTool({
+  workspace,
+  processExecEnabled: true,
+  maxTimeoutMs: 5_000,
+  maxOutputBytes: 8_000,
+  skillRuntime: {
+    definitions: [{ name: "brief-writer", description: "Write brief replies." }],
+    find: async (filter) => ({ skills: [{ name: "brief-writer", query: filter.query }] }),
+    activate: async (skill) => ({ loadedSkill: { name: skill, content: "Keep replies short.", contentHash: "hash", bytes: 19 } })
+  }
+});
+assert.equal(objectTool.definitions.some((tool) => tool.function?.name === "run_shell"), true);
+assert.equal(objectTool.definitions.some((tool) => tool.function?.name === "skill_find"), true);
+const objectShell = await objectTool.execute("run_shell", {
+  mode: "process",
+  executable: process.execPath,
+  args: ["-e", "console.log(process.cwd())"]
+}, { workspace });
+assert.equal(objectShell.status, "completed");
+assert.match(objectShell.details.cwd, new RegExp(escapeRegExp(workspace)));
+const objectSkill = await objectTool.execute("skill_activate", { skill: "brief-writer" }, { workspace });
+assert.equal(objectSkill.status, "completed");
+assert.equal(objectSkill.details.loadedSkill.name, "brief-writer");
+await objectTool.dispose();
+
 console.log("[smoke-tools] ok");
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

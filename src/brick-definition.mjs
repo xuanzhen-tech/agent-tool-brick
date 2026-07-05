@@ -16,7 +16,7 @@ import { fileURLToPath } from "node:url";
 
 const BRICK_ID = "agent-tool";
 const BRICK_NAME = "Agent Tool";
-const BRICK_VERSION = "0.1.1";
+const BRICK_VERSION = "0.1.2";
 const BRICK_KIND = "tool";
 
 const toolServiceCapability = createBrickCapability({
@@ -81,6 +81,11 @@ export const brickDefinition = createBrickDefinition({
       name: "agent-tool",
       type: "cli",
       description: "Host-facing command entrypoint. Supports serve, health, diagnostics, manifest, call, and version commands."
+    },
+    {
+      name: "AgentTool",
+      type: "api",
+      description: "SDK class for composing agent-tool directly into AgentCli."
     },
     {
       name: "createAgentToolLaunchConfig",

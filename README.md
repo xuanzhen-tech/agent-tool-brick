@@ -53,6 +53,41 @@ agent turn. `exec_command` returns a `session_id` while the process is alive;
 call `write_stdin` with that `session_id` to send input or with empty `chars` to
 poll incremental output.
 
+## SDK Object Usage
+
+Product repositories should prefer the object API when composing bricks in
+process. The command entrypoint remains available for release smoke tests and
+host-managed service mode.
+
+```js
+import { AgentTool } from "@xuanzhen-tech/agent-tool-brick";
+import { AgentSkill } from "@xuanzhen-tech/agent-skill-brick";
+import { AgentCli } from "@xuanzhen-tech/agent-cli-brick";
+
+const agentSkill = new AgentSkill({ env: process.env, workspace });
+
+const agentTool = new AgentTool({
+  env: process.env,
+  workspace,
+  runtimeDependencies,
+  skillRuntime: agentSkill
+});
+
+const agent = new AgentCli({
+  env: process.env,
+  workspace,
+  toolRuntime: agentTool,
+  skillRuntime: agentSkill,
+  runtimeDependencies
+});
+```
+
+`agentTool.definitions` returns model-facing OpenAI-compatible tool schemas.
+`agentTool.execute(name, args, context)` runs the selected tool and keeps
+persistent terminal sessions inside the `AgentTool` instance. When an
+`AgentSkill` object is injected, `skill_find` and `skill_activate` are exposed
+and delegate skill lookup/activation to that object.
+
 ## HTTP API
 
 ```text
@@ -90,7 +125,9 @@ AGENT_TOOL_RESULT_COMPRESSION
 
 `AGENT_TOOL_RG_BIN` is optional. When rg is unavailable, `workspace_search` is not exposed and diagnostics reports a warning.
 
-`AGENT_TOOL_SKILL_INDEX` is optional. When it points to an `agent-skill.index.v1` file, `skill_find` and `skill_activate` are exposed.
+`AGENT_TOOL_SKILL_INDEX` is optional for service mode. In object mode,
+inject an `AgentSkill` instance through `skillRuntime` to expose `skill_find`
+and `skill_activate`.
 
 Web tools are optional. Configure `AGENT_TOOL_TAVILY_API_KEY` or `AGENT_TOOL_WEB_GATEWAY_BASE_URL` plus `AGENT_TOOL_WEB_GATEWAY_TOKEN` to expose `web_search` and `web_fetch`.
 
@@ -110,7 +147,7 @@ npm run release:local
 The runtime artifact is a `win32-x64` zip:
 
 ```text
-dist/agent-tool-0.1.1-win32-x64.zip
+dist/agent-tool-0.1.2-win32-x64.zip
 dist/build-artifact.json
 dist/descriptor.local.json
 dist/descriptor.oss.placeholder.json

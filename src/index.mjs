@@ -7,6 +7,7 @@
  */
 
 export { brickDefinition } from "./brick-definition.mjs";
+export { AgentTool } from "./main/agent-tool.mjs";
 export {
   createAgentToolLaunchConfig,
   createAgentToolRuntimeContract,

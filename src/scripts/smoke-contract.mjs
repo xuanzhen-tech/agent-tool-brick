@@ -10,6 +10,7 @@ import assert from "node:assert/strict";
 import { validateBrickDefinition } from "@xuanzhen-tech/agent-release-foundation";
 
 import {
+  AgentTool,
   brickDefinition,
   createAgentToolLaunchConfig,
   createAgentToolManifest,
@@ -26,7 +27,7 @@ import { createToolResult } from "../main/tool-contract.mjs";
 
 assert.equal(brickDefinition.id, "agent-tool");
 assert.equal(brickDefinition.kind, "tool");
-assert.equal(brickDefinition.version, "0.1.1");
+assert.equal(brickDefinition.version, "0.1.2");
 assert.equal(validateBrickDefinition(brickDefinition).ok, true);
 assert.equal(brickDefinition.runtimeDependencies.some((item) => item.type === "node-runtime" && item.required === true), true);
 assert.equal(brickDefinition.runtimeDependencies.some((item) => item.slot === "tool:rg" && item.required === false), true);
@@ -45,6 +46,24 @@ assert.equal(runtimeContract.env.resultCompression, "AGENT_TOOL_RESULT_COMPRESSI
 assert.equal(runtimeContract.env.terminalSessionTtlMs, "AGENT_TOOL_TERMINAL_SESSION_TTL_MS");
 assert.equal(runtimeContract.runtimeDependencies.required[0].type, "node-runtime");
 assert.equal(runtimeContract.runtimeDependencies.optional[0].slot, "tool:rg");
+
+const agentTool = new AgentTool({
+  workspace: process.cwd(),
+  processExecEnabled: true,
+  runtimeDependencies: [{ type: "tool", slot: "tool:rg", id: "rg", bin: "rg" }],
+  skillRuntime: {
+    definitions: [{ name: "demo", description: "Demo skill" }],
+    find: async () => ({ skills: [{ name: "demo" }] }),
+    activate: async () => ({ loadedSkill: { name: "demo", content: "demo", contentHash: "hash", bytes: 4 } })
+  }
+});
+assert.equal(agentTool.definition.id, "agent-tool");
+assert.equal(agentTool.definitions.some((tool) => tool.function?.name === "run_shell"), true);
+assert.equal(agentTool.definitions.some((tool) => tool.function?.name === "workspace_search"), true);
+assert.equal(agentTool.definitions.some((tool) => tool.function?.name === "skill_find"), true);
+assert.equal(agentTool.definitions.some((tool) => tool.function?.name === "skill_activate"), true);
+assert.equal((await agentTool.execute("skill_find", JSON.stringify({ query: "demo" }))).details.skills[0].name, "demo");
+await agentTool.dispose();
 
 const manifest = createAgentToolManifest({
   baseUrl: "http://127.0.0.1:8791",
