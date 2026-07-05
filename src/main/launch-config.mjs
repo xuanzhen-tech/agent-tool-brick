@@ -14,6 +14,9 @@ const DEFAULT_HOST = "127.0.0.1";
 const DEFAULT_PORT = 8791;
 const DEFAULT_MAX_TIMEOUT_MS = 120_000;
 const DEFAULT_MAX_OUTPUT_BYTES = 64 * 1024;
+const DEFAULT_TERMINAL_SESSION_TTL_MS = 5 * 60_000;
+const DEFAULT_TERMINAL_MAX_SESSIONS = 16;
+const DEFAULT_TERMINAL_MAX_OUTPUT_BYTES = 256 * 1024;
 
 export function createAgentToolLaunchConfig(input = {}) {
   const host = input.host ?? DEFAULT_HOST;
@@ -42,6 +45,15 @@ export function createAgentToolLaunchConfig(input = {}) {
   }
   if (input.resultCompressionEnabled !== undefined) {
     setEnv(env, "AGENT_TOOL_RESULT_COMPRESSION", input.resultCompressionEnabled ? "true" : "false");
+  }
+  if (input.terminalSessionTtlMs !== undefined) {
+    setEnv(env, "AGENT_TOOL_TERMINAL_SESSION_TTL_MS", String(input.terminalSessionTtlMs));
+  }
+  if (input.terminalMaxSessions !== undefined) {
+    setEnv(env, "AGENT_TOOL_TERMINAL_MAX_SESSIONS", String(input.terminalMaxSessions));
+  }
+  if (input.terminalMaxOutputBytes !== undefined) {
+    setEnv(env, "AGENT_TOOL_TERMINAL_MAX_OUTPUT_BYTES", String(input.terminalMaxOutputBytes));
   }
   if (input.webMaxResults !== undefined) {
     setEnv(env, "AGENT_TOOL_WEB_MAX_RESULTS", String(input.webMaxResults));
@@ -101,6 +113,9 @@ export function createAgentToolRuntimeContract(input = {}) {
       processExecEnabled: "AGENT_TOOL_PROCESS_EXEC_ENABLED",
       maxTimeoutMs: "AGENT_TOOL_MAX_TIMEOUT_MS",
       maxOutputBytes: "AGENT_TOOL_MAX_OUTPUT_BYTES",
+      terminalSessionTtlMs: "AGENT_TOOL_TERMINAL_SESSION_TTL_MS",
+      terminalMaxSessions: "AGENT_TOOL_TERMINAL_MAX_SESSIONS",
+      terminalMaxOutputBytes: "AGENT_TOOL_TERMINAL_MAX_OUTPUT_BYTES",
       resultCompression: "AGENT_TOOL_RESULT_COMPRESSION"
     },
     runtimeDependencies: {
@@ -142,6 +157,9 @@ export function resolveServiceConfig(env = process.env, overrides = {}) {
     processExecEnabled: overrides.processExecEnabled ?? parseBoolean(env.AGENT_TOOL_PROCESS_EXEC_ENABLED, true),
     maxTimeoutMs: parsePositiveInteger(overrides.maxTimeoutMs ?? env.AGENT_TOOL_MAX_TIMEOUT_MS, DEFAULT_MAX_TIMEOUT_MS),
     maxOutputBytes: parsePositiveInteger(overrides.maxOutputBytes ?? env.AGENT_TOOL_MAX_OUTPUT_BYTES, DEFAULT_MAX_OUTPUT_BYTES),
+    terminalSessionTtlMs: parsePositiveInteger(overrides.terminalSessionTtlMs ?? env.AGENT_TOOL_TERMINAL_SESSION_TTL_MS, DEFAULT_TERMINAL_SESSION_TTL_MS),
+    terminalMaxSessions: parsePositiveInteger(overrides.terminalMaxSessions ?? env.AGENT_TOOL_TERMINAL_MAX_SESSIONS, DEFAULT_TERMINAL_MAX_SESSIONS),
+    terminalMaxOutputBytes: parsePositiveInteger(overrides.terminalMaxOutputBytes ?? env.AGENT_TOOL_TERMINAL_MAX_OUTPUT_BYTES, DEFAULT_TERMINAL_MAX_OUTPUT_BYTES),
     resultCompressionEnabled: overrides.resultCompressionEnabled ?? parseBoolean(env.AGENT_TOOL_RESULT_COMPRESSION, true)
   };
 }

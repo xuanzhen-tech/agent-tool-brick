@@ -59,6 +59,104 @@ export const RUN_SHELL_TOOL = {
   cancelable: true
 };
 
+export const EXEC_COMMAND_TOOL = {
+  name: "exec_command",
+  description: [
+    "Start a persistent terminal command and yield quickly with a session_id when it keeps running.",
+    "Use this for dev servers, watchers, REPL-like processes, and commands that may need later stdin or output polling.",
+    "Provide cmd for shell syntax, or executable plus args for direct process execution."
+  ].join(" "),
+  schema: {
+    type: "function",
+    function: {
+      name: "exec_command",
+      description: "Start a persistent terminal command and return a session_id if it is still running.",
+      parameters: {
+        type: "object",
+        properties: {
+          cmd: {
+            type: "string",
+            description: "Shell command to run. Omit when using executable plus args."
+          },
+          mode: {
+            type: "string",
+            enum: ["shell", "process"],
+            description: "Execution mode. shell uses cmd; process uses executable plus args."
+          },
+          executable: {
+            type: "string",
+            description: "Executable for mode=process, for example node, python, npm, or npx."
+          },
+          args: {
+            type: "array",
+            items: { type: "string" },
+            description: "Argument vector for mode=process."
+          },
+          workdir: {
+            type: "string",
+            description: "Workspace-relative working directory. Defaults to workspace root."
+          },
+          yield_time_ms: {
+            type: "integer",
+            minimum: 0,
+            description: "How long to wait for initial output before returning."
+          },
+          timeoutMs: {
+            type: "integer",
+            minimum: 1,
+            description: "Maximum lifetime for the background terminal session."
+          },
+          maxOutputBytes: {
+            type: "integer",
+            minimum: 1,
+            description: "Maximum buffered output bytes for this terminal session."
+          }
+        }
+      }
+    }
+  },
+  permissions: ["process.exec", "terminal.session"],
+  timeoutMs: 5_000,
+  cancelable: true
+};
+
+export const WRITE_STDIN_TOOL = {
+  name: "write_stdin",
+  description: [
+    "Write stdin to a terminal session created by exec_command, or pass empty chars to poll incremental output.",
+    "Use the session_id returned by exec_command."
+  ].join(" "),
+  schema: {
+    type: "function",
+    function: {
+      name: "write_stdin",
+      description: "Write to or poll an existing persistent terminal session.",
+      parameters: {
+        type: "object",
+        required: ["session_id"],
+        properties: {
+          session_id: {
+            type: "string",
+            description: "Terminal session id returned by exec_command."
+          },
+          chars: {
+            type: "string",
+            description: "Characters to write to stdin. Use an empty string to poll output."
+          },
+          yield_time_ms: {
+            type: "integer",
+            minimum: 0,
+            description: "How long to wait for more output before returning."
+          }
+        }
+      }
+    }
+  },
+  permissions: ["terminal.session"],
+  timeoutMs: 5_000,
+  cancelable: true
+};
+
 export const WORKSPACE_SEARCH_TOOL = {
   name: "workspace_search",
   description: "Search text inside the current workspace through the injected rg tool runtime.",

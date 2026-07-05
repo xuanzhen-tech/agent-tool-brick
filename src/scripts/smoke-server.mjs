@@ -53,7 +53,10 @@ const config = {
     webGatewayBaseUrl: webGateway.url,
     webGatewayToken: "smoke-token",
     maxTimeoutMs: 10_000,
-    maxOutputBytes: 16_000
+    maxOutputBytes: 16_000,
+    terminalSessionTtlMs: 5_000,
+    terminalMaxSessions: 4,
+    terminalMaxOutputBytes: 16_000
   }),
   port: 0
 };
@@ -70,6 +73,8 @@ try {
   const manifest = await getJson(`${url}/api/tools/manifest`);
   assert.equal(manifest.schemaVersion, "agent-cli-tool.manifest.v1");
   assert.equal(manifest.tools.some((tool) => tool.name === "run_shell"), true);
+  assert.equal(manifest.tools.some((tool) => tool.name === "exec_command"), true);
+  assert.equal(manifest.tools.some((tool) => tool.name === "write_stdin"), true);
   assert.equal(manifest.tools.some((tool) => tool.name === "skill_find"), true);
   assert.equal(manifest.tools.some((tool) => tool.name === "web_search"), true);
 
@@ -100,8 +105,7 @@ try {
     workspace: { root: workspace },
     limits: { timeoutMs: 10_000, maxOutputChars: 8_000 }
   });
-  await wait(200);
-  const canceled = await postJson(`${url}/api/tools/cancel`, {
+  const canceled = await cancelUntilActive(`${url}/api/tools/cancel`, {
     toolCallId: "cancel-call",
     reason: "smoke cancel"
   });
@@ -109,6 +113,45 @@ try {
   assert.equal(canceled.canceled, true);
   const canceledResult = await pending;
   assert.equal(canceledResult.status, "interrupted");
+
+  const terminalStart = await postJson(`${url}/api/tools/call`, {
+    schemaVersion: "agent-cli-tool.call.v1",
+    toolCallId: "server-terminal-start",
+    toolName: "exec_command",
+    arguments: {
+      mode: "process",
+      executable: process.execPath,
+      args: ["-e", "console.log('server-terminal-ready'); setInterval(() => console.log('server-terminal-tick'), 200);"],
+      yield_time_ms: 100,
+      timeoutMs: 5_000
+    },
+    workspace: { root: workspace },
+    limits: { timeoutMs: 5_000, maxOutputChars: 8_000 }
+  });
+  assert.equal(terminalStart.status, "completed");
+  assert.equal(terminalStart.details.running, true);
+  assert.ok(terminalStart.details.session_id);
+
+  const sessionCanceled = await postJson(`${url}/api/tools/cancel`, {
+    session_id: terminalStart.details.session_id,
+    reason: "smoke terminal cancel"
+  });
+  assert.equal(sessionCanceled.ok, true);
+  assert.equal(sessionCanceled.canceled, true);
+
+  const terminalAfterCancel = await postJson(`${url}/api/tools/call`, {
+    schemaVersion: "agent-cli-tool.call.v1",
+    toolCallId: "server-terminal-after-cancel",
+    toolName: "write_stdin",
+    arguments: {
+      session_id: terminalStart.details.session_id,
+      chars: "",
+      yield_time_ms: 300
+    },
+    workspace: { root: workspace },
+    limits: { timeoutMs: 5_000, maxOutputChars: 8_000 }
+  });
+  assert.equal(terminalAfterCancel.status, "interrupted");
 
   const skillResult = await postJson(`${url}/api/tools/call`, {
     schemaVersion: "agent-cli-tool.call.v1",
@@ -168,6 +211,16 @@ async function postJson(url, body) {
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function cancelUntilActive(url, body) {
+  let last;
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    await wait(100);
+    last = await postJson(url, body);
+    if (last.canceled) return last;
+  }
+  return last;
 }
 
 async function createMockWebGateway() {

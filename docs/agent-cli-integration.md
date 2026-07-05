@@ -29,6 +29,14 @@ GET /api/tools/manifest
 
 `agent-tool` compresses model-facing tool results before returning them. The response keeps stable status, error, diagnostics, artifacts, and metadata, while large `content` / `details` payloads are summarized with hash, length, head/tail, and important paths. `agent-cli` should treat the returned `content` as the content to send back to the model.
 
+Shell tools are split by lifecycle:
+
+- `run_shell` is a one-shot command and returns only after completion, timeout, or cancel.
+- `exec_command` starts a persistent terminal command and returns quickly with `details.session_id` when the process is still running.
+- `write_stdin` sends input to a persistent session, or polls incremental output when `chars` is empty.
+
+The orchestrator should prefer `exec_command` / `write_stdin` for dev servers, watchers, REPLs, and commands that may block a model turn.
+
 Example:
 
 ```json
@@ -71,6 +79,15 @@ POST /api/tools/cancel
 ```
 
 `agent-tool` aborts the running process when possible and returns `status: "interrupted"` from the pending call.
+
+For a persistent terminal session that has already returned from `exec_command`, cancel by `session_id`:
+
+```json
+{
+  "session_id": "terminal-labc123-1",
+  "reason": "Agent turn interrupted by client."
+}
+```
 
 ## Failure Behavior
 

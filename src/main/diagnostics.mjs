@@ -13,10 +13,11 @@ import { isRgAvailable } from "./search-runtime.mjs";
 import { isSkillIndexAvailable } from "./skill-runtime.mjs";
 import { isWebProviderAvailable } from "./web-runtime.mjs";
 
-export async function createDiagnosticsReport(config) {
+export async function createDiagnosticsReport(config, options = {}) {
   const checks = [];
   checks.push(createNodeRuntimeCheck(config));
   checks.push(createProcessExecCheck(config));
+  checks.push(createTerminalSessionCheck(config, options.terminalManager));
   checks.push(await createRgRuntimeCheck(config));
   checks.push(await createSkillIndexCheck(config));
   checks.push(createWebProviderCheck(config));
@@ -116,6 +117,30 @@ function createProcessExecCheck(config) {
     status: "pass",
     summary: "run_shell is enabled.",
     detail: `maxTimeoutMs=${config.maxTimeoutMs}; maxOutputBytes=${config.maxOutputBytes}`
+  };
+}
+
+function createTerminalSessionCheck(config, terminalManager) {
+  if (config.processExecEnabled === false) {
+    return {
+      id: "tool.terminal_session",
+      status: "warn",
+      summary: "terminal session tools are disabled by host policy.",
+      detail: "AGENT_TOOL_PROCESS_EXEC_ENABLED=false"
+    };
+  }
+  const stats = terminalManager?.stats?.() ?? {
+    sessions: 0,
+    running: 0,
+    maxSessions: config.terminalMaxSessions,
+    sessionTtlMs: config.terminalSessionTtlMs,
+    maxOutputBytes: config.terminalMaxOutputBytes
+  };
+  return {
+    id: "tool.terminal_session",
+    status: "pass",
+    summary: "exec_command and write_stdin are enabled.",
+    detail: `running=${stats.running}; sessions=${stats.sessions}/${stats.maxSessions}; sessionTtlMs=${stats.sessionTtlMs}; maxOutputBytes=${stats.maxOutputBytes}`
   };
 }
 

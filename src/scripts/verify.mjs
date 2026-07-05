@@ -122,6 +122,7 @@ async function validateRuntimeArtifactIfPresent() {
     "src/main/shell-runtime.mjs",
     "src/main/search-runtime.mjs",
     "src/main/skill-runtime.mjs",
+    "src/main/terminal-runtime.mjs",
     "src/main/tool-contract.mjs",
     "src/main/tool-result-compression.mjs",
     "src/main/web-runtime.mjs"

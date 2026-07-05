@@ -1,7 +1,16 @@
+/**
+ * Local HTTP service for agent-tool.
+ *
+ * The server exposes health, diagnostics, tool discovery, tool calls, and
+ * cancellation. It owns active HTTP call abort controllers and the persistent
+ * terminal session manager so long-running commands survive across requests.
+ */
+
 import http from "node:http";
 
 import { createDiagnosticsReport, createHealthReport } from "./diagnostics.mjs";
 import { resolveServiceConfig } from "./launch-config.mjs";
+import { createTerminalSessionManager } from "./terminal-runtime.mjs";
 import { createToolRegistry } from "./tool-registry.mjs";
 import { createToolResult, validateAgentToolCall } from "./tool-contract.mjs";
 
@@ -10,6 +19,7 @@ const DEFAULT_BODY_LIMIT = 1024 * 1024;
 export async function createAgentToolServer(input = {}) {
   const config = input.config ?? resolveServiceConfig(process.env, input);
   const activeCalls = new Map();
+  const terminalManager = input.terminalManager ?? createTerminalSessionManager(config);
 
   const server = http.createServer(async (request, response) => {
     try {
@@ -24,11 +34,11 @@ export async function createAgentToolServer(input = {}) {
         return;
       }
       if (request.method === "GET" && url.pathname === "/api/tools/diagnostics") {
-        sendJson(response, 200, await createDiagnosticsReport(config));
+        sendJson(response, 200, await createDiagnosticsReport(config, { terminalManager }));
         return;
       }
       if (request.method === "GET" && url.pathname === "/api/tools/manifest") {
-        const registry = await createToolRegistry(config);
+        const registry = await createToolRegistry(config, { terminalManager });
         sendJson(response, 200, registry.manifest);
         return;
       }
@@ -40,7 +50,7 @@ export async function createAgentToolServer(input = {}) {
           return;
         }
 
-        const registry = await createToolRegistry(config);
+        const registry = await createToolRegistry(config, { terminalManager });
         const controller = new AbortController();
         activeCalls.set(body.toolCallId, {
           controller,
@@ -66,14 +76,21 @@ export async function createAgentToolServer(input = {}) {
       if (request.method === "POST" && url.pathname === "/api/tools/cancel") {
         const body = await readRequestJson(request);
         const toolCallId = typeof body.toolCallId === "string" ? body.toolCallId : "";
+        const sessionId = typeof body.session_id === "string"
+          ? body.session_id
+          : typeof body.sessionId === "string"
+            ? body.sessionId
+            : "";
         const active = activeCalls.get(toolCallId);
         if (active) {
           active.controller.abort(body.reason || "Tool call canceled.");
         }
+        const sessionCanceled = sessionId ? terminalManager.cancelSession(sessionId, body.reason || "Terminal session canceled.") : false;
         sendJson(response, 200, {
           ok: true,
-          canceled: Boolean(active),
-          toolCallId
+          canceled: Boolean(active) || sessionCanceled,
+          toolCallId,
+          session_id: sessionId || undefined
         });
         return;
       }
@@ -93,6 +110,7 @@ export async function createAgentToolServer(input = {}) {
     config,
     server,
     activeCalls,
+    terminalManager,
     async listen() {
       await new Promise((resolve, reject) => {
         server.once("error", reject);
@@ -112,6 +130,7 @@ export async function createAgentToolServer(input = {}) {
         active.controller.abort("Server is closing.");
       }
       activeCalls.clear();
+      terminalManager.closeAll("Server is closing.");
       await new Promise((resolve) => server.close(() => resolve()));
     }
   };

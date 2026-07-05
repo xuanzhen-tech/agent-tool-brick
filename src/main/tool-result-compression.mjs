@@ -1,3 +1,12 @@
+/**
+ * Model-facing tool result compression.
+ *
+ * Tool outputs can be much larger than a model turn should receive directly.
+ * This module preserves stable status/error/details fields while summarizing
+ * noisy content, including terminal stdout/stderr, with hashes and head/tail
+ * excerpts.
+ */
+
 import crypto from "node:crypto";
 
 export const TOOL_RESULT_COMPRESSION_MARKER = "[agent-tool-result-compressed]";
@@ -67,7 +76,7 @@ export function compressToolExecutionResult(input) {
 }
 
 function buildCompressedToolResult(input, result, policy, rawSerialized) {
-  if (policy.name === "run_shell") {
+  if (policy.forceStructured === true && isTerminalLikePolicy(policy.name)) {
     const shellSummary = buildRunShellSummary(input, result, policy, rawSerialized);
     return {
       ...result,
@@ -127,6 +136,9 @@ function buildRunShellSummary(input, result, policy, rawSerialized) {
       hash: stableHash(rawSerialized)
     },
     status: pickDefined({
+      sessionId: details.sessionId,
+      session_id: details.session_id,
+      running: details.running,
       exitCode: details.exitCode,
       timedOut: details.timedOut,
       blocked: details.blocked,
@@ -146,6 +158,9 @@ function buildRunShellSummary(input, result, policy, rawSerialized) {
     modelVisible,
     details: pruneUndefined({
       ...pickDefined({
+        sessionId: details.sessionId,
+        session_id: details.session_id,
+        running: details.running,
         command: details.command,
         mode: details.mode,
         exitCode: details.exitCode,
@@ -155,7 +170,11 @@ function buildRunShellSummary(input, result, policy, rawSerialized) {
         signal: details.signal,
         cwd: details.cwd,
         errorType: details.errorType,
-        interrupted: details.interrupted
+        interrupted: details.interrupted,
+        startedAt: details.startedAt,
+        lastUsedAt: details.lastUsedAt,
+        yieldedAfterMs: details.yieldedAfterMs,
+        stdinBytes: details.stdinBytes
       }),
       stdout: renderChannelForDetails(stdoutSummary),
       stderr: renderChannelForDetails(stderrSummary),
@@ -168,14 +187,18 @@ function buildRunShellSummary(input, result, policy, rawSerialized) {
 }
 
 function selectPolicy(toolName, result, contentText, detailsSerialized) {
-  if (toolName === "run_shell") {
-    return makePolicy("run_shell", RUN_SHELL_BUDGET_TOKENS, true);
+  if (["run_shell", "exec_command", "write_stdin"].includes(toolName)) {
+    return makePolicy(toolName, RUN_SHELL_BUDGET_TOKENS, true);
   }
   const combined = `${toolName}\n${contentText.slice(0, 10_000)}\n${detailsSerialized.slice(0, 10_000)}`;
   if (looksLikeHighNoiseResult(combined, result.details)) {
     return makePolicy("high_noise_json", HIGH_NOISE_BUDGET_TOKENS);
   }
   return makePolicy("global", DEFAULT_GLOBAL_BUDGET_TOKENS);
+}
+
+function isTerminalLikePolicy(policyName) {
+  return ["run_shell", "exec_command", "write_stdin"].includes(policyName);
 }
 
 function makePolicy(name, budgetTokens, forceStructured = false) {

@@ -35,6 +35,14 @@ const shellCapability = createBrickCapability({
   requires: ["node-runtime"]
 });
 
+const terminalCapability = createBrickCapability({
+  id: "agent-tool.terminal-session",
+  name: "Terminal Session Tools",
+  type: "tool",
+  description: "Starts persistent terminal sessions and writes stdin or polls output without blocking the agent turn.",
+  requires: ["node-runtime"]
+});
+
 const workspaceSearchCapability = createBrickCapability({
   id: "agent-tool.workspace-search",
   name: "Workspace Search Tool",
@@ -98,6 +106,7 @@ export const brickDefinition = createBrickDefinition({
   capabilities: [
     toolServiceCapability,
     shellCapability,
+    terminalCapability,
     workspaceSearchCapability,
     skillToolsCapability,
     webToolsCapability
@@ -117,7 +126,10 @@ export const brickDefinition = createBrickDefinition({
       webMaxResults: { type: "integer", minimum: 1 },
       processExecEnabled: { type: "boolean" },
       maxTimeoutMs: { type: "integer", minimum: 1 },
-      maxOutputBytes: { type: "integer", minimum: 1 }
+      maxOutputBytes: { type: "integer", minimum: 1 },
+      terminalSessionTtlMs: { type: "integer", minimum: 1 },
+      terminalMaxSessions: { type: "integer", minimum: 1 },
+      terminalMaxOutputBytes: { type: "integer", minimum: 1 }
     }
   },
   runtimeDependencies: [

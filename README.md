@@ -12,6 +12,7 @@ This brick owns:
 - tool cancel semantics
 - model-facing tool result compression
 - `run_shell`
+- `exec_command` and `write_stdin` for persistent terminal sessions
 - optional `workspace_search` through an injected `rg` runtime
 - optional `skill_find` and `skill_activate` through an injected agent-skill index
 - optional `web_search` and `web_fetch` through Tavily or a generic web gateway
@@ -40,6 +41,12 @@ Direct tool call smoke:
 ```bash
 agent-tool call --tool run_shell --json "{\"mode\":\"process\",\"executable\":\"node\",\"args\":[\"--version\"]}"
 ```
+
+Use `run_shell` for bounded one-shot commands. Use `exec_command` when a command
+may keep running, needs later stdin, or should be polled without blocking the
+agent turn. `exec_command` returns a `session_id` while the process is alive;
+call `write_stdin` with that `session_id` to send input or with empty `chars` to
+poll incremental output.
 
 ## HTTP API
 
@@ -70,6 +77,9 @@ AGENT_TOOL_WEB_MAX_RESULTS
 AGENT_TOOL_PROCESS_EXEC_ENABLED
 AGENT_TOOL_MAX_TIMEOUT_MS
 AGENT_TOOL_MAX_OUTPUT_BYTES
+AGENT_TOOL_TERMINAL_SESSION_TTL_MS
+AGENT_TOOL_TERMINAL_MAX_SESSIONS
+AGENT_TOOL_TERMINAL_MAX_OUTPUT_BYTES
 AGENT_TOOL_RESULT_COMPRESSION
 ```
 

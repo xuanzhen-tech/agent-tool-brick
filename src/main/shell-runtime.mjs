@@ -1,3 +1,11 @@
+/**
+ * One-shot shell tool runtime.
+ *
+ * `run_shell` is for bounded commands that should finish within one tool call.
+ * Persistent terminal sessions live in `terminal-runtime.mjs` so long-running or
+ * interactive processes do not hold the model turn hostage.
+ */
+
 import path from "node:path";
 
 import { numberField, stringField } from "./env.mjs";
@@ -122,7 +130,7 @@ function buildProcessCommandSpec(argv) {
   return { executable: argv[0] ?? "", args: argv.slice(1) };
 }
 
-function buildShellCommandSpec(command) {
+export function buildShellCommandSpec(command) {
   if (process.platform === "win32") {
     return {
       executable: "powershell.exe",

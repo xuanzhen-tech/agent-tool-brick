@@ -58,6 +58,7 @@ jobs:
           node --check src/main/server.mjs
           node --check src/main/shell-runtime.mjs
           node --check src/main/skill-runtime.mjs
+          node --check src/main/terminal-runtime.mjs
           node --check src/main/tool-contract.mjs
           node --check src/main/tool-definitions.mjs
           node --check src/main/tool-registry.mjs

@@ -1,3 +1,11 @@
+/**
+ * Low-level process helpers for agent-tool.
+ *
+ * `runProcess` powers one-shot tools, while the exported output and kill
+ * helpers are reused by persistent terminal sessions. Keeping process-tree
+ * cleanup here prevents Windows and POSIX behavior from diverging silently.
+ */
+
 import { spawn } from "node:child_process";
 
 export function runProcess({
@@ -46,28 +54,14 @@ export function runProcess({
       resolve(result);
     };
 
-    const killChild = () => {
-      if (!child?.pid) return;
-      if (process.platform === "win32") {
-        const killer = spawn("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], {
-          windowsHide: true,
-          shell: false,
-          stdio: "ignore"
-        });
-        killer.on("error", () => child.kill());
-        return;
-      }
-      child.kill("SIGTERM");
-    };
-
     const abortListener = () => {
       interrupted = true;
-      killChild();
+      killProcessTree(child);
     };
 
     const timer = setTimeout(() => {
       timedOut = true;
-      killChild();
+      killProcessTree(child);
     }, timeoutMs);
     timer.unref?.();
 
@@ -113,6 +107,21 @@ export function runProcess({
       child.stdin?.end();
     }
   });
+}
+
+export function killProcessTree(child) {
+  if (!child?.pid) return false;
+  if (process.platform === "win32") {
+    const killer = spawn("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], {
+      windowsHide: true,
+      shell: false,
+      stdio: "ignore"
+    });
+    killer.on("error", () => child.kill());
+    return true;
+  }
+  child.kill("SIGTERM");
+  return true;
 }
 
 export function appendOutput(current, chunk, maxOutputBytes) {

@@ -21,7 +21,7 @@ import {
   validateAgentToolManifest,
   validateAgentToolResult
 } from "../index.mjs";
-import { RUN_SHELL_TOOL } from "../main/tool-definitions.mjs";
+import { EXEC_COMMAND_TOOL, RUN_SHELL_TOOL, WRITE_STDIN_TOOL } from "../main/tool-definitions.mjs";
 import { createToolResult } from "../main/tool-contract.mjs";
 
 assert.equal(brickDefinition.id, "agent-tool");
@@ -30,6 +30,7 @@ assert.equal(brickDefinition.version, "0.1.0");
 assert.equal(validateBrickDefinition(brickDefinition).ok, true);
 assert.equal(brickDefinition.runtimeDependencies.some((item) => item.type === "node-runtime" && item.required === true), true);
 assert.equal(brickDefinition.runtimeDependencies.some((item) => item.slot === "tool:rg" && item.required === false), true);
+assert.equal(brickDefinition.capabilities.some((item) => item.id === "agent-tool.terminal-session"), true);
 assert.equal(brickDefinition.capabilities.some((item) => item.id === "agent-tool.skill-tools"), true);
 assert.equal(brickDefinition.capabilities.some((item) => item.id === "agent-tool.web"), true);
 
@@ -41,15 +42,18 @@ const runtimeContract = createAgentToolRuntimeContract({ platform: "win32-x64" }
 assert.equal(runtimeContract.schemaVersion, "agent-tool.runtime.v1");
 assert.equal(runtimeContract.command, "agent-tool");
 assert.equal(runtimeContract.env.resultCompression, "AGENT_TOOL_RESULT_COMPRESSION");
+assert.equal(runtimeContract.env.terminalSessionTtlMs, "AGENT_TOOL_TERMINAL_SESSION_TTL_MS");
 assert.equal(runtimeContract.runtimeDependencies.required[0].type, "node-runtime");
 assert.equal(runtimeContract.runtimeDependencies.optional[0].slot, "tool:rg");
 
 const manifest = createAgentToolManifest({
   baseUrl: "http://127.0.0.1:8791",
-  tools: [RUN_SHELL_TOOL]
+  tools: [RUN_SHELL_TOOL, EXEC_COMMAND_TOOL, WRITE_STDIN_TOOL]
 });
 assert.equal(validateAgentToolManifest(manifest).ok, true);
 assert.equal(manifest.tools[0].name, "run_shell");
+assert.equal(manifest.tools.some((tool) => tool.name === "exec_command"), true);
+assert.equal(manifest.tools.some((tool) => tool.name === "write_stdin"), true);
 
 assert.equal(validateAgentToolCall({
   schemaVersion: "agent-cli-tool.call.v1",

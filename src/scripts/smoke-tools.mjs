@@ -54,7 +54,10 @@ const config = {
     webGatewayBaseUrl: "http://127.0.0.1:0",
     webGatewayToken: "smoke-token",
     maxTimeoutMs: 5_000,
-    maxOutputBytes: 8_000
+    maxOutputBytes: 8_000,
+    terminalSessionTtlMs: 3_000,
+    terminalMaxSessions: 4,
+    terminalMaxOutputBytes: 8_000
   })
 };
 const registry = await createToolRegistry(config);
@@ -132,6 +135,91 @@ const empty = await registry.execute({
 });
 assert.equal(empty.status, "blocked");
 
+const terminalStart = await registry.execute({
+  schemaVersion: "agent-cli-tool.call.v1",
+  toolCallId: "call-terminal-start",
+  toolName: "exec_command",
+  arguments: {
+    mode: "process",
+    executable: process.execPath,
+    args: ["-e", "console.log('terminal-ready'); setTimeout(() => console.log('terminal-later'), 500);"],
+    yield_time_ms: 100,
+    timeoutMs: 2_000
+  },
+  workspace: { root: workspace },
+  limits: { timeoutMs: 5_000, maxOutputChars: 8_000 }
+});
+assert.equal(terminalStart.status, "completed");
+assert.equal(terminalStart.details.running, true);
+assert.ok(terminalStart.details.session_id);
+await wait(700);
+
+const terminalPoll = await registry.execute({
+  schemaVersion: "agent-cli-tool.call.v1",
+  toolCallId: "call-terminal-poll",
+  toolName: "write_stdin",
+  arguments: {
+    session_id: terminalStart.details.session_id,
+    chars: "",
+    yield_time_ms: 100
+  },
+  workspace: { root: workspace },
+  limits: { timeoutMs: 5_000, maxOutputChars: 8_000 }
+});
+assert.equal(terminalPoll.status, "completed");
+assert.equal(terminalPoll.details.running, false);
+assert.equal(terminalPoll.details.exitCode, 0);
+assert.match(terminalPoll.details.stdout, /terminal-later/);
+
+const interactiveStart = await registry.execute({
+  schemaVersion: "agent-cli-tool.call.v1",
+  toolCallId: "call-interactive-start",
+  toolName: "exec_command",
+  arguments: {
+    mode: "process",
+    executable: process.execPath,
+    args: ["-e", "process.stdin.setEncoding('utf8'); console.log('stdin-ready'); process.stdin.on('data', (chunk) => { console.log('echo:' + chunk.trim()); if (chunk.includes('quit')) process.exit(0); });"],
+    yield_time_ms: 500,
+    timeoutMs: 3_000
+  },
+  workspace: { root: workspace },
+  limits: { timeoutMs: 5_000, maxOutputChars: 8_000 }
+});
+assert.equal(interactiveStart.status, "completed");
+assert.equal(interactiveStart.details.running, true);
+
+const interactiveWrite = await registry.execute({
+  schemaVersion: "agent-cli-tool.call.v1",
+  toolCallId: "call-interactive-write",
+  toolName: "write_stdin",
+  arguments: {
+    session_id: interactiveStart.details.session_id,
+    chars: "hello\n",
+    yield_time_ms: 100
+  },
+  workspace: { root: workspace },
+  limits: { timeoutMs: 5_000, maxOutputChars: 8_000 }
+});
+assert.equal(interactiveWrite.status, "completed");
+assert.equal(interactiveWrite.details.running, true);
+assert.match(interactiveWrite.details.stdout, /echo:hello/);
+
+const interactiveEnd = await registry.execute({
+  schemaVersion: "agent-cli-tool.call.v1",
+  toolCallId: "call-interactive-end",
+  toolName: "write_stdin",
+  arguments: {
+    session_id: interactiveStart.details.session_id,
+    chars: "quit\n",
+    yield_time_ms: 300
+  },
+  workspace: { root: workspace },
+  limits: { timeoutMs: 5_000, maxOutputChars: 8_000 }
+});
+assert.equal(interactiveEnd.status, "completed");
+assert.equal(interactiveEnd.details.running, false);
+assert.match(interactiveEnd.details.stdout, /echo:quit/);
+
 const rgAvailability = await isRgAvailable(config.rgBin);
 if (rgAvailability.available && registry.has("workspace_search")) {
   const search = await registry.execute({
@@ -170,3 +258,7 @@ assert.equal(skillActivate.details.loadedSkill.name, "brief-writer");
 assert.match(skillActivate.details.loadedSkill.content, /Keep replies short/);
 
 console.log("[smoke-tools] ok");
+
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}

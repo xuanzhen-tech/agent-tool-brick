@@ -9,29 +9,35 @@
 import { brickDefinition } from "../brick-definition.mjs";
 import { createAgentToolManifest } from "./tool-contract.mjs";
 import {
+  EXEC_COMMAND_TOOL,
   RUN_SHELL_TOOL,
   SKILL_ACTIVATE_TOOL,
   SKILL_FIND_TOOL,
   WEB_FETCH_TOOL,
   WEB_SEARCH_TOOL,
+  WRITE_STDIN_TOOL,
   WORKSPACE_SEARCH_TOOL
 } from "./tool-definitions.mjs";
 import { executeRunShell } from "./shell-runtime.mjs";
 import { executeWorkspaceSearch, isRgAvailable } from "./search-runtime.mjs";
 import { executeSkillActivate, executeSkillFind, isSkillIndexAvailable } from "./skill-runtime.mjs";
+import { createTerminalSessionManager } from "./terminal-runtime.mjs";
 import { compressToolExecutionResult } from "./tool-result-compression.mjs";
 import { executeWebFetch, executeWebSearch, isWebProviderAvailable } from "./web-runtime.mjs";
 
-export async function createToolRegistry(config) {
+export async function createToolRegistry(config, options = {}) {
   const rgAvailability = await isRgAvailable(config.rgBin);
   const skillAvailability = await isSkillIndexAvailable(config.skillIndexPath);
   const webAvailability = isWebProviderAvailable(config);
+  const terminalManager = options.terminalManager ?? createTerminalSessionManager(config);
   const tools = [];
   const executors = new Map();
 
   if (config.processExecEnabled !== false) {
-    tools.push(RUN_SHELL_TOOL);
+    tools.push(RUN_SHELL_TOOL, EXEC_COMMAND_TOOL, WRITE_STDIN_TOOL);
     executors.set(RUN_SHELL_TOOL.name, executeRunShell);
+    executors.set(EXEC_COMMAND_TOOL.name, (call, currentConfig, signal) => terminalManager.execCommand(call, currentConfig, signal));
+    executors.set(WRITE_STDIN_TOOL.name, (call, currentConfig, signal) => terminalManager.writeStdin(call, currentConfig, signal));
   }
 
   if (rgAvailability.available) {
