@@ -11,3 +11,8 @@ export {
   validateAgentToolManifest,
   validateAgentToolResult
 } from "./main/tool-contract.mjs";
+export {
+  TOOL_RESULT_COMPRESSION_MARKER,
+  compressToolExecutionResult,
+  isToolResultCompressionEnabled
+} from "./main/tool-result-compression.mjs";

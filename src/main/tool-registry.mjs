@@ -3,6 +3,7 @@ import { createAgentToolManifest } from "./tool-contract.mjs";
 import { RUN_SHELL_TOOL, WORKSPACE_SEARCH_TOOL } from "./tool-definitions.mjs";
 import { executeRunShell } from "./shell-runtime.mjs";
 import { executeWorkspaceSearch, isRgAvailable } from "./search-runtime.mjs";
+import { compressToolExecutionResult } from "./tool-result-compression.mjs";
 
 export async function createToolRegistry(config) {
   const rgAvailability = await isRgAvailable(config.rgBin);
@@ -46,7 +47,13 @@ export async function createToolRegistry(config) {
           }
         };
       }
-      return await executor(call, config, signal);
+      const execution = await executor(call, config, signal);
+      return compressToolExecutionResult({
+        toolName: call.toolName,
+        toolCallId: call.toolCallId,
+        result: execution,
+        compressionEnabled: config.resultCompressionEnabled
+      }).result;
     }
   };
 }

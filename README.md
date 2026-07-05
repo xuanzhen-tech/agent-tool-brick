@@ -10,6 +10,7 @@ This brick owns:
 - local tool call endpoint
 - tool diagnostics
 - tool cancel semantics
+- model-facing tool result compression
 - `run_shell`
 - optional `workspace_search` through an injected `rg` runtime
 
@@ -62,9 +63,12 @@ AGENT_TOOL_RG_BIN
 AGENT_TOOL_PROCESS_EXEC_ENABLED
 AGENT_TOOL_MAX_TIMEOUT_MS
 AGENT_TOOL_MAX_OUTPUT_BYTES
+AGENT_TOOL_RESULT_COMPRESSION
 ```
 
 `AGENT_TOOL_RG_BIN` is optional. When rg is unavailable, `workspace_search` is not exposed and diagnostics reports a warning.
+
+Tool result compression is enabled by default. Set `AGENT_TOOL_RESULT_COMPRESSION=off` only for debugging raw tool output.
 
 ## Local Verification
 

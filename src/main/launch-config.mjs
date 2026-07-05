@@ -27,6 +27,9 @@ export function createAgentToolLaunchConfig(input = {}) {
   if (input.maxOutputBytes !== undefined) {
     setEnv(env, "AGENT_TOOL_MAX_OUTPUT_BYTES", String(input.maxOutputBytes));
   }
+  if (input.resultCompressionEnabled !== undefined) {
+    setEnv(env, "AGENT_TOOL_RESULT_COMPRESSION", input.resultCompressionEnabled ? "true" : "false");
+  }
 
   return {
     command: "agent-tool",
@@ -76,7 +79,8 @@ export function createAgentToolRuntimeContract(input = {}) {
       rgBin: "AGENT_TOOL_RG_BIN",
       processExecEnabled: "AGENT_TOOL_PROCESS_EXEC_ENABLED",
       maxTimeoutMs: "AGENT_TOOL_MAX_TIMEOUT_MS",
-      maxOutputBytes: "AGENT_TOOL_MAX_OUTPUT_BYTES"
+      maxOutputBytes: "AGENT_TOOL_MAX_OUTPUT_BYTES",
+      resultCompression: "AGENT_TOOL_RESULT_COMPRESSION"
     },
     runtimeDependencies: {
       required: [
@@ -111,7 +115,8 @@ export function resolveServiceConfig(env = process.env, overrides = {}) {
     rgBin: firstNonEmpty(overrides.rgBin, env.AGENT_TOOL_RG_BIN),
     processExecEnabled: overrides.processExecEnabled ?? parseBoolean(env.AGENT_TOOL_PROCESS_EXEC_ENABLED, true),
     maxTimeoutMs: parsePositiveInteger(overrides.maxTimeoutMs ?? env.AGENT_TOOL_MAX_TIMEOUT_MS, DEFAULT_MAX_TIMEOUT_MS),
-    maxOutputBytes: parsePositiveInteger(overrides.maxOutputBytes ?? env.AGENT_TOOL_MAX_OUTPUT_BYTES, DEFAULT_MAX_OUTPUT_BYTES)
+    maxOutputBytes: parsePositiveInteger(overrides.maxOutputBytes ?? env.AGENT_TOOL_MAX_OUTPUT_BYTES, DEFAULT_MAX_OUTPUT_BYTES),
+    resultCompressionEnabled: overrides.resultCompressionEnabled ?? parseBoolean(env.AGENT_TOOL_RESULT_COMPRESSION, true)
   };
 }
 

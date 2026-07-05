@@ -7,6 +7,8 @@ import {
   createAgentToolLaunchConfig,
   createAgentToolManifest,
   createAgentToolRuntimeContract,
+  compressToolExecutionResult,
+  TOOL_RESULT_COMPRESSION_MARKER,
   validateAgentToolCall,
   validateAgentToolLaunchConfig,
   validateAgentToolManifest,
@@ -29,6 +31,7 @@ assert.equal(launchConfig.env.AGENT_TOOL_WORKSPACE_ROOT, process.cwd());
 const runtimeContract = createAgentToolRuntimeContract({ platform: "win32-x64" });
 assert.equal(runtimeContract.schemaVersion, "agent-tool.runtime.v1");
 assert.equal(runtimeContract.command, "agent-tool");
+assert.equal(runtimeContract.env.resultCompression, "AGENT_TOOL_RESULT_COMPRESSION");
 assert.equal(runtimeContract.runtimeDependencies.required[0].type, "node-runtime");
 assert.equal(runtimeContract.runtimeDependencies.optional[0].slot, "tool:rg");
 
@@ -51,5 +54,41 @@ assert.equal(validateAgentToolResult(createToolResult({
   status: "completed",
   content: "ok"
 })).ok, true);
+
+const compressed = compressToolExecutionResult({
+  toolName: "run_shell",
+  toolCallId: "call-1",
+  result: {
+    status: "completed",
+    content: JSON.stringify({
+      exitCode: 0,
+      stdout: "hello",
+      stderr: "",
+      cwd: process.cwd()
+    }),
+    details: {
+      exitCode: 0,
+      stdout: "hello",
+      stderr: "",
+      cwd: process.cwd()
+    }
+  }
+});
+assert.equal(compressed.changed, true);
+assert.match(compressed.result.content, new RegExp(TOOL_RESULT_COMPRESSION_MARKER.replaceAll("[", "\\[").replaceAll("]", "\\]")));
+assert.equal(compressed.result.details.__agentToolCompression.policy, "run_shell");
+
+const disabled = compressToolExecutionResult({
+  toolName: "run_shell",
+  toolCallId: "call-2",
+  compressionEnabled: false,
+  result: {
+    status: "completed",
+    content: "raw",
+    details: { stdout: "raw", stderr: "" }
+  }
+});
+assert.equal(disabled.changed, false);
+assert.equal(disabled.result.content, "raw");
 
 console.log("[smoke-contract] ok");

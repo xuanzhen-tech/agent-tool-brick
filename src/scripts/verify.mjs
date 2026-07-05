@@ -113,7 +113,8 @@ async function validateRuntimeArtifactIfPresent() {
     "src/main/server.mjs",
     "src/main/shell-runtime.mjs",
     "src/main/search-runtime.mjs",
-    "src/main/tool-contract.mjs"
+    "src/main/tool-contract.mjs",
+    "src/main/tool-result-compression.mjs"
   ];
   for (const requiredFile of requiredFiles) {
     if (!runtimeFiles.includes(requiredFile)) {

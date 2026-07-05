@@ -31,6 +31,8 @@ const okResult = await registry.execute({
   limits: { timeoutMs: 5_000, maxOutputChars: 8_000 }
 });
 assert.equal(okResult.status, "completed");
+assert.match(okResult.content, /\[agent-tool-result-compressed\]/);
+assert.equal(okResult.details.__agentToolCompression.policy, "run_shell");
 assert.match(okResult.details.stdout, /agent-tool-ok/);
 
 const nonzero = await registry.execute({
@@ -63,6 +65,22 @@ const timeout = await registry.execute({
 });
 assert.equal(timeout.status, "failed");
 assert.equal(timeout.details.timedOut, true);
+
+const largeOutput = await registry.execute({
+  schemaVersion: "agent-cli-tool.call.v1",
+  toolCallId: "call-large-output",
+  toolName: "run_shell",
+  arguments: {
+    mode: "process",
+    executable: process.execPath,
+    args: ["-e", "process.stdout.write('x'.repeat(20000))"]
+  },
+  workspace: { root: workspace },
+  limits: { timeoutMs: 5_000, maxOutputChars: 8_000 }
+});
+assert.equal(largeOutput.status, "completed");
+assert.match(largeOutput.details.stdout, /\[agent-tool-result-compressed\]/);
+assert.match(largeOutput.content, /omittedChars/);
 
 const empty = await registry.execute({
   schemaVersion: "agent-cli-tool.call.v1",

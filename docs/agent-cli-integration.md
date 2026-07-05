@@ -27,6 +27,8 @@ GET /api/tools/manifest
 6. `agent-tool` executes and returns `agent-cli-tool.result.v1`.
 7. `agent-cli` writes thread events and maps them to external SSE.
 
+`agent-tool` compresses model-facing tool results before returning them. The response keeps stable status, error, diagnostics, artifacts, and metadata, while large `content` / `details` payloads are summarized with hash, length, head/tail, and important paths. `agent-cli` should treat the returned `content` as the content to send back to the model.
+
 Example:
 
 ```json
@@ -85,4 +87,3 @@ If `rg` is missing:
 - `run_shell` remains available when enabled.
 - `workspace_search` is not exposed.
 - diagnostics warns.
-
