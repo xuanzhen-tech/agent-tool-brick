@@ -1,9 +1,8 @@
 /**
- * Diagnostics for agent-tool runtime dependencies and optional providers.
+ * agent-tool 运行时依赖和可选 provider 的诊断逻辑。
  *
- * The service must be able to start with optional integrations missing. This
- * file turns missing rg, skill index, or web provider configuration into
- * actionable warn checks instead of startup failures.
+ * 服务必须能在缺少可选集成时启动。本文件把缺失 rg、skill index 或
+ * web provider 配置转成可行动的 warn 检查，而不是启动失败。
  */
 
 import fs from "node:fs/promises";

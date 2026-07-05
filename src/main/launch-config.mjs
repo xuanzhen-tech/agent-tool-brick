@@ -1,10 +1,8 @@
 /**
- * Launch and runtime contract helpers for agent-tool.
+ * agent-tool 的启动配置和运行时合同工具。
  *
- * Host launchers use this file to translate installed runtime paths and
- * provider configuration into environment variables. Keeping the mapping here
- * prevents product/client-shell code from hard-coding private implementation
- * details.
+ * host launcher 通过本文件把已安装运行时路径和 provider 配置转换为环境变量。
+ * 把映射集中在这里，可以避免产品或 client-shell 代码硬编码私有实现细节。
  */
 
 import { brickDefinition } from "../brick-definition.mjs";

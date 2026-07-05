@@ -1,9 +1,9 @@
 /**
- * Provider-backed web tools for agent-tool.
+ * agent-tool 中由 provider 支撑的 web 工具。
  *
- * The brick exposes stable `web_search` and `web_fetch` model tools, but keeps
- * provider choice behind configuration. This mirrors the baseline Tavily/gateway
- * contract while avoiding SDK dependencies inside the runtime artifact.
+ * 积木暴露稳定的 `web_search` 和 `web_fetch` 模型工具，但通过配置隐藏
+ * provider 选择。这保持了 baseline 中 Tavily/gateway 合同，同时避免在
+ * runtime artifact 中引入 SDK 依赖。
  */
 
 import { numberField, stringField } from "./env.mjs";

@@ -1,9 +1,9 @@
 /**
- * Low-level process helpers for agent-tool.
+ * agent-tool 的底层进程工具。
  *
- * `runProcess` powers one-shot tools, while the exported output and kill
- * helpers are reused by persistent terminal sessions. Keeping process-tree
- * cleanup here prevents Windows and POSIX behavior from diverging silently.
+ * `runProcess` 支撑一次性工具调用，导出的输出和 kill 工具会被持久终端
+ * 会话复用。把进程树清理集中在这里，可以避免 Windows 和 POSIX 行为
+ * 悄悄分叉。
  */
 
 import { spawn } from "node:child_process";

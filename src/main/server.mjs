@@ -1,9 +1,9 @@
 /**
- * Local HTTP service for agent-tool.
+ * agent-tool 的本地 HTTP 服务。
  *
- * The server exposes health, diagnostics, tool discovery, tool calls, and
- * cancellation. It owns active HTTP call abort controllers and the persistent
- * terminal session manager so long-running commands survive across requests.
+ * 服务暴露 health、diagnostics、工具发现、工具调用和取消能力。它持有
+ * 活跃 HTTP 调用的 abort controller 以及持久终端会话管理器，让长时间
+ * 命令可以跨请求继续存在。
  */
 
 import http from "node:http";

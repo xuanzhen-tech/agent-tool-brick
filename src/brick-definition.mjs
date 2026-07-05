@@ -1,9 +1,9 @@
 /**
- * Public brick definition for agent-tool.
+ * agent-tool 的公开积木定义。
  *
- * The definition is the baseLine-facing contract used by product repositories
- * and release tooling. It declares what this brick can do, which runtime
- * dependencies it needs, and which configuration knobs host launchers may set.
+ * 这个定义是面向 baseLine、产品仓库和发布工具的合同。它声明
+ * 当前积木提供哪些能力、依赖哪些运行时，以及 host launcher 可以
+ * 注入哪些配置项。
  */
 
 import {

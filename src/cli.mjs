@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 /**
- * agent-tool host-facing command entrypoint.
+ * agent-tool 面向 host 的命令入口。
  *
- * This executable starts the local tool service for orchestrators and exposes
- * smoke-friendly one-shot commands for health, diagnostics, manifest, and
- * direct tool calls. It is a brick control surface, not the product CLI.
+ * 这个可执行入口用于为编排器启动本地工具服务，同时提供便于 smoke
+ * 验证的一次性 health、diagnostics、manifest 和直接工具调用命令。
+ * 它是积木控制面，不是产品 CLI。
  */
 
 import { once } from "node:events";

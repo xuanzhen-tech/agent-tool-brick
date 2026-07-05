@@ -1,9 +1,8 @@
 /**
- * Build the distributable agent-tool runtime artifact.
+ * 构建可分发的 agent-tool 运行时 artifact。
  *
- * The artifact contains the host-facing command entrypoint, server runtime
- * modules, brick metadata, and a runtime contract. It does not bundle external
- * runtime binaries such as Node, rg, Python, or browser assets.
+ * artifact 包含面向 host 的命令入口、服务运行时模块、积木元数据和运行时
+ * 合同。它不会打包 Node、rg、Python 或浏览器资源等外部运行时二进制。
  */
 
 import crypto from "node:crypto";

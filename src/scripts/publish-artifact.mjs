@@ -1,8 +1,8 @@
 /**
- * Publish the built agent-tool artifact to OSS and write descriptor.oss.json.
+ * 将构建出的 agent-tool artifact 发布到 OSS，并写入 descriptor.oss.json。
  *
- * This is the credentialed release path used by GitHub Actions. It preserves
- * the local descriptor contract while replacing the file URL with an OSS URL.
+ * 这是 GitHub Actions 使用的带凭据发布路径。它保留本地 descriptor 合同，
+ * 同时把 file URL 替换为 OSS URL。
  */
 
 import fs from "node:fs/promises";

@@ -1,8 +1,8 @@
 /**
- * Small environment parsing helpers shared by agent-tool modules.
+ * agent-tool 模块共享的轻量环境变量解析工具。
  *
- * Keeping these conversions here avoids repeating trim, boolean, and numeric
- * fallback logic across launch config, tool definitions, and runtime adapters.
+ * 把 trim、boolean 和数字 fallback 逻辑集中在这里，可以避免启动配置、
+ * 工具定义和运行时 adapter 里反复实现同一套转换。
  */
 
 export function firstNonEmpty(...values) {

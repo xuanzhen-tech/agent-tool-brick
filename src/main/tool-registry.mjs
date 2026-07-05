@@ -1,9 +1,8 @@
 /**
- * Tool registry and availability gate for agent-tool.
+ * agent-tool 的工具注册表和可用性闸门。
  *
- * This module decides which model-facing tools are exposed for the current
- * launch configuration. Optional dependencies such as rg, skill index, and web
- * providers degrade by hiding their tools instead of failing the service.
+ * 本模块根据当前启动配置决定哪些模型可见工具应该被暴露。rg、skill index
+ * 和 web provider 等可选依赖缺失时，会隐藏相关工具，而不是让服务失败。
  */
 
 import { brickDefinition } from "../brick-definition.mjs";

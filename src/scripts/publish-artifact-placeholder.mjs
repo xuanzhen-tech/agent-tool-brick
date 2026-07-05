@@ -1,8 +1,8 @@
 /**
- * Create a placeholder published descriptor without uploading to OSS.
+ * 创建不上传 OSS 的占位发布 descriptor。
  *
- * Local release checks use this script to validate the same descriptor shape as
- * a real OSS publish while avoiding credential requirements in development.
+ * 本地 release 检查用这个脚本验证与真实 OSS 发布一致的 descriptor 形状，
+ * 同时避免开发环境需要凭据。
  */
 
 import fs from "node:fs/promises";

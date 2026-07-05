@@ -1,9 +1,8 @@
 /**
- * End-to-end smoke test for direct tool execution.
+ * 直接工具执行的端到端 smoke 测试。
  *
- * The fixture workspace exercises run_shell, optional rg-backed search,
- * skill activation from an injected index, and compression of model-facing tool
- * results without starting the HTTP server.
+ * fixture workspace 会在不启动 HTTP 服务的情况下，覆盖 run_shell、可选的
+ * rg 搜索、通过注入 index 进行 skill 激活，以及面向模型的工具结果压缩。
  */
 
 import assert from "node:assert/strict";
@@ -18,7 +17,7 @@ import { createToolRegistry } from "../main/tool-registry.mjs";
 const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "agent-tool-smoke-"));
 await fs.writeFile(path.join(workspace, "note.txt"), "alpha\nneedle\nomega\n", "utf8");
 
-// The temporary skill index mimics the contract produced by agent-skill.
+// 临时 skill index 模拟 agent-skill 产出的合同。
 const skillRoot = path.join(workspace, "skills", "brief-writer");
 await fs.mkdir(skillRoot, { recursive: true });
 const skillFile = path.join(skillRoot, "SKILL.md");

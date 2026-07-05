@@ -1,10 +1,9 @@
 /**
- * Model-facing tool result compression.
+ * 面向模型的工具结果压缩。
  *
- * Tool outputs can be much larger than a model turn should receive directly.
- * This module preserves stable status/error/details fields while summarizing
- * noisy content, including terminal stdout/stderr, with hashes and head/tail
- * excerpts.
+ * 工具输出可能远大于模型单轮应该直接接收的内容。本模块保留稳定的
+ * status、error、details 字段，同时用 hash 和 head/tail 摘要压缩噪声
+ * 内容，包括终端 stdout/stderr。
  */
 
 import crypto from "node:crypto";

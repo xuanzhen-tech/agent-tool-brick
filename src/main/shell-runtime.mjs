@@ -1,9 +1,8 @@
 /**
- * One-shot shell tool runtime.
+ * 一次性 shell 工具运行时。
  *
- * `run_shell` is for bounded commands that should finish within one tool call.
- * Persistent terminal sessions live in `terminal-runtime.mjs` so long-running or
- * interactive processes do not hold the model turn hostage.
+ * `run_shell` 面向应该在一次工具调用内结束的有界命令。持久终端会话放在
+ * `terminal-runtime.mjs` 中，避免长时间或交互式进程阻塞整个模型轮次。
  */
 
 import path from "node:path";

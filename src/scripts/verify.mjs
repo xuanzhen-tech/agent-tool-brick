@@ -1,9 +1,9 @@
 /**
- * Verify local build outputs for the agent-tool brick.
+ * 验证 agent-tool 积木的本地构建产物。
  *
- * This final release-local guardrail validates brick metadata, package shape,
- * runtime artifact integrity, descriptor shape, and obvious leakage of secrets
- * or unrelated runtime binaries.
+ * 这是 release:local 的最后一道护栏，用来校验积木元数据、包形状、
+ * runtime artifact 完整性、descriptor 形状，以及明显的 secret 或无关
+ * 运行时二进制泄露。
  */
 
 import crypto from "node:crypto";

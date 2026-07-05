@@ -1,9 +1,8 @@
 /**
- * End-to-end smoke test for the local HTTP tool service.
+ * 本地 HTTP 工具服务的端到端 smoke 测试。
  *
- * The test starts the server on a random localhost port, verifies manifest and
- * call routes, and uses a mock web gateway so web tool behavior is deterministic
- * without relying on external network services.
+ * 测试会在随机 localhost 端口启动服务，验证 manifest 和调用路由，并使用
+ * mock web gateway，让 web 工具行为保持确定性且不依赖外部网络服务。
  */
 
 import assert from "node:assert/strict";
@@ -18,8 +17,8 @@ import { createAgentToolServer } from "../main/server.mjs";
 const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "agent-tool-server-"));
 await fs.writeFile(path.join(workspace, "server-note.txt"), "server needle", "utf8");
 
-// The skill fixture proves the server can expose skill_find/skill_activate
-// when AGENT_TOOL_SKILL_INDEX points at a valid index file.
+// 这个 skill fixture 用来证明当 AGENT_TOOL_SKILL_INDEX 指向合法 index 文件时，
+// 服务能够暴露 skill_find 和 skill_activate。
 const skillRoot = path.join(workspace, "skills", "server-skill");
 await fs.mkdir(skillRoot, { recursive: true });
 const skillFile = path.join(skillRoot, "SKILL.md");

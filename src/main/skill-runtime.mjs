@@ -1,10 +1,9 @@
 /**
- * Runtime adapter for model-callable skill tools.
+ * 面向模型可调用 skill 工具的运行时 adapter。
  *
- * agent-tool does not own skill installation or indexing. This module only
- * consumes an agent-skill generated index file, exposes lightweight search, and
- * reads a selected SKILL.md for activation. The returned loadedSkill payload is
- * intentionally stateless; the orchestrator is responsible for persistence.
+ * agent-tool 不负责 skill 安装或索引。本模块只消费 agent-skill 生成的
+ * index 文件，暴露轻量搜索，并在激活时读取选中的 SKILL.md。返回的
+ * loadedSkill payload 刻意保持无状态，持久化由编排器负责。
  */
 
 import crypto from "node:crypto";

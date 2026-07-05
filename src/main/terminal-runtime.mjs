@@ -1,10 +1,9 @@
 /**
- * Persistent terminal session runtime for agent-tool.
+ * agent-tool 的持久终端会话运行时。
  *
- * `exec_command` starts a command and yields quickly with a session id when the
- * process keeps running. `write_stdin` then writes input or polls incremental
- * output. This prevents long-running dev servers, watchers, and REPL-style
- * commands from blocking the whole agent turn.
+ * `exec_command` 启动命令，并在进程继续运行时快速返回 session id。
+ * `write_stdin` 随后负责写入输入或轮询增量输出。这样可以避免 dev server、
+ * watcher 和 REPL 类命令阻塞整个 agent 轮次。
  */
 
 import { spawn } from "node:child_process";

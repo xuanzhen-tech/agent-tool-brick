@@ -1,8 +1,8 @@
 /**
- * Smoke-test the public SDK and brick metadata contract.
+ * smoke 测试公开 SDK 和积木元数据合同。
  *
- * This script verifies launch config, manifest validation, tool-call/result
- * schemas, and result compression without starting the HTTP server.
+ * 本脚本在不启动 HTTP 服务的情况下，验证启动配置、manifest 校验、
+ * 工具调用/结果 schema，以及结果压缩能力。
  */
 
 import assert from "node:assert/strict";

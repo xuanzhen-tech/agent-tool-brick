@@ -1,9 +1,8 @@
 /**
- * Create the local artifact descriptor for agent-tool.
+ * 创建 agent-tool 的本地 artifact descriptor。
  *
- * This script converts build metadata into the release-foundation descriptor
- * consumed by product manifests and installers. The local descriptor may use a
- * file URL; publish scripts replace it with an OSS URL.
+ * 本脚本把构建元数据转换成产品 manifest 和安装器消费的 release-foundation
+ * descriptor。本地 descriptor 可以使用 file URL；发布脚本会替换成 OSS URL。
  */
 
 import fs from "node:fs/promises";

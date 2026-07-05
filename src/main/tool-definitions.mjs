@@ -1,10 +1,9 @@
 /**
- * Model-facing tool definitions exposed by agent-tool.
+ * agent-tool 暴露给模型的工具定义。
  *
- * This file contains the public tool schemas that are advertised through the
- * tool manifest. Runtime implementations live in sibling modules; keeping the
- * schemas here makes the model contract easy to audit without following the
- * execution code.
+ * 本文件包含通过工具 manifest 对外公布的公共 tool schema。运行时实现位于
+ * 相邻模块；把 schema 集中在这里，便于审计模型合同，而不需要一路追踪
+ * 执行代码。
  */
 
 export const RUN_SHELL_TOOL = {
