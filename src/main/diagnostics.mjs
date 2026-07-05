@@ -1,13 +1,25 @@
+/**
+ * Diagnostics for agent-tool runtime dependencies and optional providers.
+ *
+ * The service must be able to start with optional integrations missing. This
+ * file turns missing rg, skill index, or web provider configuration into
+ * actionable warn checks instead of startup failures.
+ */
+
 import fs from "node:fs/promises";
 
 import { brickDefinition } from "../brick-definition.mjs";
 import { isRgAvailable } from "./search-runtime.mjs";
+import { isSkillIndexAvailable } from "./skill-runtime.mjs";
+import { isWebProviderAvailable } from "./web-runtime.mjs";
 
 export async function createDiagnosticsReport(config) {
   const checks = [];
   checks.push(createNodeRuntimeCheck(config));
   checks.push(createProcessExecCheck(config));
   checks.push(await createRgRuntimeCheck(config));
+  checks.push(await createSkillIndexCheck(config));
+  checks.push(createWebProviderCheck(config));
 
   const status = checks.some((check) => check.status === "fail")
     ? "fail"
@@ -24,6 +36,42 @@ export async function createDiagnosticsReport(config) {
     },
     status,
     checks
+  };
+}
+
+async function createSkillIndexCheck(config) {
+  const availability = await isSkillIndexAvailable(config.skillIndexPath);
+  if (availability.available) {
+    return {
+      id: "tool.skill_index",
+      status: "pass",
+      summary: "Skill index is available; skill_find and skill_activate are exposed.",
+      detail: availability.detail
+    };
+  }
+  return {
+    id: "tool.skill_index",
+    status: "warn",
+    summary: "Skill index is not available; skill_find and skill_activate will not be exposed.",
+    detail: availability.detail
+  };
+}
+
+function createWebProviderCheck(config) {
+  const availability = isWebProviderAvailable(config);
+  if (availability.available) {
+    return {
+      id: "tool.web_provider",
+      status: "pass",
+      summary: "Web provider is configured; web_search and web_fetch are exposed.",
+      detail: availability.detail
+    };
+  }
+  return {
+    id: "tool.web_provider",
+    status: "warn",
+    summary: "Web provider is not configured; web_search and web_fetch will not be exposed.",
+    detail: availability.detail
   };
 }
 

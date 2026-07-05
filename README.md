@@ -13,6 +13,8 @@ This brick owns:
 - model-facing tool result compression
 - `run_shell`
 - optional `workspace_search` through an injected `rg` runtime
+- optional `skill_find` and `skill_activate` through an injected agent-skill index
+- optional `web_search` and `web_fetch` through Tavily or a generic web gateway
 
 This brick does not own:
 
@@ -60,6 +62,11 @@ AGENT_TOOL_TOKEN
 AGENT_TOOL_WORKSPACE_ROOT
 AGENT_TOOL_NODE_BIN
 AGENT_TOOL_RG_BIN
+AGENT_TOOL_SKILL_INDEX
+AGENT_TOOL_TAVILY_API_KEY
+AGENT_TOOL_WEB_GATEWAY_BASE_URL
+AGENT_TOOL_WEB_GATEWAY_TOKEN
+AGENT_TOOL_WEB_MAX_RESULTS
 AGENT_TOOL_PROCESS_EXEC_ENABLED
 AGENT_TOOL_MAX_TIMEOUT_MS
 AGENT_TOOL_MAX_OUTPUT_BYTES
@@ -67,6 +74,10 @@ AGENT_TOOL_RESULT_COMPRESSION
 ```
 
 `AGENT_TOOL_RG_BIN` is optional. When rg is unavailable, `workspace_search` is not exposed and diagnostics reports a warning.
+
+`AGENT_TOOL_SKILL_INDEX` is optional. When it points to an `agent-skill.index.v1` file, `skill_find` and `skill_activate` are exposed.
+
+Web tools are optional. Configure `AGENT_TOOL_TAVILY_API_KEY` or `AGENT_TOOL_WEB_GATEWAY_BASE_URL` plus `AGENT_TOOL_WEB_GATEWAY_TOKEN` to expose `web_search` and `web_fetch`.
 
 Tool result compression is enabled by default. Set `AGENT_TOOL_RESULT_COMPRESSION=off` only for debugging raw tool output.
 

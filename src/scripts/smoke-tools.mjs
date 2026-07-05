@@ -1,3 +1,11 @@
+/**
+ * End-to-end smoke test for direct tool execution.
+ *
+ * The fixture workspace exercises run_shell, optional rg-backed search,
+ * skill activation from an injected index, and compression of model-facing tool
+ * results without starting the HTTP server.
+ */
+
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -9,9 +17,42 @@ import { createToolRegistry } from "../main/tool-registry.mjs";
 
 const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "agent-tool-smoke-"));
 await fs.writeFile(path.join(workspace, "note.txt"), "alpha\nneedle\nomega\n", "utf8");
+
+// The temporary skill index mimics the contract produced by agent-skill.
+const skillRoot = path.join(workspace, "skills", "brief-writer");
+await fs.mkdir(skillRoot, { recursive: true });
+const skillFile = path.join(skillRoot, "SKILL.md");
+await fs.writeFile(skillFile, "---\nname: brief-writer\ndescription: Write brief replies.\n---\n\n# Brief Writer\n\nKeep replies short.\n", "utf8");
+const skillIndexPath = path.join(workspace, "agent-skill.index.json");
+await fs.writeFile(skillIndexPath, JSON.stringify({
+  schemaVersion: "agent-skill.index.v1",
+  generatedAt: new Date().toISOString(),
+  roots: [],
+  skills: [
+    {
+      id: "brief-writer",
+      name: "brief-writer",
+      version: "0.1.0",
+      description: "Write brief replies.",
+      path: skillFile,
+      source: "workspace",
+      capabilities: ["writing.brief"],
+      requiredTools: ["run_shell"],
+      optionalTools: ["workspace_search"],
+      requiredEnv: [],
+      enabled: true,
+      contentHash: "smoke",
+      bytes: 100
+    }
+  ],
+  diagnostics: []
+}, null, 2), "utf8");
 const config = {
   ...resolveServiceConfig(process.env, {
     workspaceRoot: workspace,
+    skillIndexPath,
+    webGatewayBaseUrl: "http://127.0.0.1:0",
+    webGatewayToken: "smoke-token",
     maxTimeoutMs: 5_000,
     maxOutputBytes: 8_000
   })
@@ -106,5 +147,26 @@ if (rgAvailability.available && registry.has("workspace_search")) {
 } else {
   console.log("[smoke-tools] rg unavailable; workspace_search skipped");
 }
+
+const skillFind = await registry.execute({
+  schemaVersion: "agent-cli-tool.call.v1",
+  toolCallId: "call-skill-find",
+  toolName: "skill_find",
+  arguments: { query: "brief", capability: "writing.brief" },
+  workspace: { root: workspace }
+});
+assert.equal(skillFind.status, "completed");
+assert.match(skillFind.content, /brief-writer/);
+
+const skillActivate = await registry.execute({
+  schemaVersion: "agent-cli-tool.call.v1",
+  toolCallId: "call-skill-activate",
+  toolName: "skill_activate",
+  arguments: { skill: "brief-writer" },
+  workspace: { root: workspace }
+});
+assert.equal(skillActivate.status, "completed");
+assert.equal(skillActivate.details.loadedSkill.name, "brief-writer");
+assert.match(skillActivate.details.loadedSkill.content, /Keep replies short/);
 
 console.log("[smoke-tools] ok");

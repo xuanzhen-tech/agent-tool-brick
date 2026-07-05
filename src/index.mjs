@@ -1,3 +1,11 @@
+/**
+ * Public SDK surface for agent-tool.
+ *
+ * Host launchers and other bricks should import from this file only. The module
+ * re-exports stable contracts for launch configuration, manifest validation,
+ * and tool-result compression while keeping runtime internals private.
+ */
+
 export { brickDefinition } from "./brick-definition.mjs";
 export {
   createAgentToolLaunchConfig,

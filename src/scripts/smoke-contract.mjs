@@ -1,3 +1,10 @@
+/**
+ * Smoke-test the public SDK and brick metadata contract.
+ *
+ * This script verifies launch config, manifest validation, tool-call/result
+ * schemas, and result compression without starting the HTTP server.
+ */
+
 import assert from "node:assert/strict";
 
 import { validateBrickDefinition } from "@xuanzhen-tech/agent-release-foundation";
@@ -23,6 +30,8 @@ assert.equal(brickDefinition.version, "0.1.0");
 assert.equal(validateBrickDefinition(brickDefinition).ok, true);
 assert.equal(brickDefinition.runtimeDependencies.some((item) => item.type === "node-runtime" && item.required === true), true);
 assert.equal(brickDefinition.runtimeDependencies.some((item) => item.slot === "tool:rg" && item.required === false), true);
+assert.equal(brickDefinition.capabilities.some((item) => item.id === "agent-tool.skill-tools"), true);
+assert.equal(brickDefinition.capabilities.some((item) => item.id === "agent-tool.web"), true);
 
 const launchConfig = createAgentToolLaunchConfig({ port: 8791, workspace: process.cwd(), rgBin: "rg" });
 assert.equal(validateAgentToolLaunchConfig(launchConfig).ok, true);

@@ -1,3 +1,10 @@
+/**
+ * Publish the built agent-tool artifact to OSS and write descriptor.oss.json.
+ *
+ * This is the credentialed release path used by GitHub Actions. It preserves
+ * the local descriptor contract while replacing the file URL with an OSS URL.
+ */
+
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";

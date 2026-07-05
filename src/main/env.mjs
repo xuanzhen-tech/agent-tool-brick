@@ -1,3 +1,10 @@
+/**
+ * Small environment parsing helpers shared by agent-tool modules.
+ *
+ * Keeping these conversions here avoids repeating trim, boolean, and numeric
+ * fallback logic across launch config, tool definitions, and runtime adapters.
+ */
+
 export function firstNonEmpty(...values) {
   for (const value of values) {
     if (typeof value === "string" && value.trim()) return value.trim();
@@ -27,4 +34,3 @@ export function numberField(value) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : undefined;
 }
-

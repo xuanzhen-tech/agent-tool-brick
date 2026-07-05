@@ -1,3 +1,11 @@
+/**
+ * Build the distributable agent-tool runtime artifact.
+ *
+ * The artifact contains the CLI, server runtime modules, brick metadata, and a
+ * runtime contract. It does not bundle external runtime binaries such as Node,
+ * rg, Python, or browser assets.
+ */
+
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";

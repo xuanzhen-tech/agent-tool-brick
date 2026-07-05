@@ -1,3 +1,11 @@
+/**
+ * Verify local build outputs for the agent-tool brick.
+ *
+ * This final release-local guardrail validates brick metadata, package shape,
+ * runtime artifact integrity, descriptor shape, and obvious leakage of secrets
+ * or unrelated runtime binaries.
+ */
+
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -113,8 +121,10 @@ async function validateRuntimeArtifactIfPresent() {
     "src/main/server.mjs",
     "src/main/shell-runtime.mjs",
     "src/main/search-runtime.mjs",
+    "src/main/skill-runtime.mjs",
     "src/main/tool-contract.mjs",
-    "src/main/tool-result-compression.mjs"
+    "src/main/tool-result-compression.mjs",
+    "src/main/web-runtime.mjs"
   ];
   for (const requiredFile of requiredFiles) {
     if (!runtimeFiles.includes(requiredFile)) {

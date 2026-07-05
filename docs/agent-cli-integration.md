@@ -87,3 +87,17 @@ If `rg` is missing:
 - `run_shell` remains available when enabled.
 - `workspace_search` is not exposed.
 - diagnostics warns.
+
+If `agent-skill` index is missing:
+
+- `agent-tool` still starts.
+- `skill_find` and `skill_activate` are not exposed.
+- diagnostics warns.
+
+When `skill_activate` succeeds, `agent-tool` returns a `loadedSkill` payload. The orchestrator owns persistence, duplicate detection, and rendering that payload into durable skill context.
+
+If web provider config is missing:
+
+- `agent-tool` still starts.
+- `web_search` and `web_fetch` are not exposed.
+- diagnostics warns.

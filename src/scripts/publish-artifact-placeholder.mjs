@@ -1,3 +1,10 @@
+/**
+ * Create a placeholder published descriptor without uploading to OSS.
+ *
+ * Local release checks use this script to validate the same descriptor shape as
+ * a real OSS publish while avoiding credential requirements in development.
+ */
+
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";

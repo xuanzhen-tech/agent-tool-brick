@@ -1,3 +1,12 @@
+/**
+ * Launch and runtime contract helpers for agent-tool.
+ *
+ * Host launchers use this file to translate installed runtime paths and
+ * provider configuration into environment variables. Keeping the mapping here
+ * prevents product/client-shell code from hard-coding private implementation
+ * details.
+ */
+
 import { brickDefinition } from "../brick-definition.mjs";
 import { firstNonEmpty, parseBoolean, parsePositiveInteger } from "./env.mjs";
 
@@ -17,6 +26,10 @@ export function createAgentToolLaunchConfig(input = {}) {
   setEnv(env, "AGENT_TOOL_NODE_BIN", input.nodeBin);
   setEnv(env, "AGENT_TOOL_RG_BIN", input.rgBin);
   setEnv(env, "AGENT_TOOL_TOKEN", input.token);
+  setEnv(env, "AGENT_TOOL_SKILL_INDEX", input.skillIndexPath);
+  setEnv(env, "AGENT_TOOL_TAVILY_API_KEY", input.tavilyApiKey);
+  setEnv(env, "AGENT_TOOL_WEB_GATEWAY_BASE_URL", input.webGatewayBaseUrl);
+  setEnv(env, "AGENT_TOOL_WEB_GATEWAY_TOKEN", input.webGatewayToken);
 
   if (input.processExecEnabled !== undefined) {
     setEnv(env, "AGENT_TOOL_PROCESS_EXEC_ENABLED", input.processExecEnabled ? "true" : "false");
@@ -29,6 +42,9 @@ export function createAgentToolLaunchConfig(input = {}) {
   }
   if (input.resultCompressionEnabled !== undefined) {
     setEnv(env, "AGENT_TOOL_RESULT_COMPRESSION", input.resultCompressionEnabled ? "true" : "false");
+  }
+  if (input.webMaxResults !== undefined) {
+    setEnv(env, "AGENT_TOOL_WEB_MAX_RESULTS", String(input.webMaxResults));
   }
 
   return {
@@ -77,6 +93,11 @@ export function createAgentToolRuntimeContract(input = {}) {
       workspaceRoot: "AGENT_TOOL_WORKSPACE_ROOT",
       nodeBin: "AGENT_TOOL_NODE_BIN",
       rgBin: "AGENT_TOOL_RG_BIN",
+      skillIndex: "AGENT_TOOL_SKILL_INDEX",
+      tavilyApiKey: "AGENT_TOOL_TAVILY_API_KEY",
+      webGatewayBaseUrl: "AGENT_TOOL_WEB_GATEWAY_BASE_URL",
+      webGatewayToken: "AGENT_TOOL_WEB_GATEWAY_TOKEN",
+      webMaxResults: "AGENT_TOOL_WEB_MAX_RESULTS",
       processExecEnabled: "AGENT_TOOL_PROCESS_EXEC_ENABLED",
       maxTimeoutMs: "AGENT_TOOL_MAX_TIMEOUT_MS",
       maxOutputBytes: "AGENT_TOOL_MAX_OUTPUT_BYTES",
@@ -113,6 +134,11 @@ export function resolveServiceConfig(env = process.env, overrides = {}) {
     workspaceRoot: firstNonEmpty(overrides.workspaceRoot, env.AGENT_TOOL_WORKSPACE_ROOT),
     nodeBin: firstNonEmpty(overrides.nodeBin, env.AGENT_TOOL_NODE_BIN),
     rgBin: firstNonEmpty(overrides.rgBin, env.AGENT_TOOL_RG_BIN),
+    skillIndexPath: firstNonEmpty(overrides.skillIndexPath, env.AGENT_TOOL_SKILL_INDEX),
+    tavilyApiKey: firstNonEmpty(overrides.tavilyApiKey, env.AGENT_TOOL_TAVILY_API_KEY, env.TAVILY_API_KEY),
+    webGatewayBaseUrl: firstNonEmpty(overrides.webGatewayBaseUrl, env.AGENT_TOOL_WEB_GATEWAY_BASE_URL),
+    webGatewayToken: firstNonEmpty(overrides.webGatewayToken, env.AGENT_TOOL_WEB_GATEWAY_TOKEN),
+    webMaxResults: parsePositiveInteger(overrides.webMaxResults ?? env.AGENT_TOOL_WEB_MAX_RESULTS ?? env.TAVILY_MAX_RESULTS, 5),
     processExecEnabled: overrides.processExecEnabled ?? parseBoolean(env.AGENT_TOOL_PROCESS_EXEC_ENABLED, true),
     maxTimeoutMs: parsePositiveInteger(overrides.maxTimeoutMs ?? env.AGENT_TOOL_MAX_TIMEOUT_MS, DEFAULT_MAX_TIMEOUT_MS),
     maxOutputBytes: parsePositiveInteger(overrides.maxOutputBytes ?? env.AGENT_TOOL_MAX_OUTPUT_BYTES, DEFAULT_MAX_OUTPUT_BYTES),

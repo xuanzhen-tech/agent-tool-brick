@@ -1,3 +1,11 @@
+/**
+ * Create the local artifact descriptor for agent-tool.
+ *
+ * This script converts build metadata into the release-foundation descriptor
+ * consumed by product manifests and installers. The local descriptor may use a
+ * file URL; publish scripts replace it with an OSS URL.
+ */
+
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";

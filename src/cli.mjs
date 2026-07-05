@@ -1,4 +1,12 @@
 #!/usr/bin/env node
+/**
+ * agent-tool command-line entrypoint.
+ *
+ * The CLI starts the local tool service for orchestrators and also exposes
+ * smoke-friendly one-shot commands for health, diagnostics, manifest, and
+ * direct tool calls.
+ */
+
 import { once } from "node:events";
 import process from "node:process";
 

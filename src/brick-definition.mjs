@@ -1,3 +1,11 @@
+/**
+ * Public brick definition for agent-tool.
+ *
+ * The definition is the baseLine-facing contract used by product repositories
+ * and release tooling. It declares what this brick can do, which runtime
+ * dependencies it needs, and which configuration knobs host launchers may set.
+ */
+
 import {
   createBrickCapability,
   createBrickDefinition,
@@ -33,6 +41,24 @@ const workspaceSearchCapability = createBrickCapability({
   type: "tool",
   description: "Searches workspace text through an injected rg tool runtime when available.",
   requires: ["node-runtime", "tool:rg"],
+  optional: true
+});
+
+const skillToolsCapability = createBrickCapability({
+  id: "agent-tool.skill-tools",
+  name: "Skill Discovery And Activation Tools",
+  type: "tool",
+  description: "Finds indexed skills and returns loadedSkill activation payloads from an injected agent-skill index.",
+  requires: ["node-runtime", "agent-skill:index"],
+  optional: true
+});
+
+const webToolsCapability = createBrickCapability({
+  id: "agent-tool.web",
+  name: "Web Search And Fetch Tools",
+  type: "tool",
+  description: "Searches and fetches public web content through configured Tavily or generic web gateway providers.",
+  requires: ["node-runtime", "web-provider"],
   optional: true
 });
 
@@ -72,7 +98,9 @@ export const brickDefinition = createBrickDefinition({
   capabilities: [
     toolServiceCapability,
     shellCapability,
-    workspaceSearchCapability
+    workspaceSearchCapability,
+    skillToolsCapability,
+    webToolsCapability
   ],
   configSchema: {
     type: "object",
@@ -82,6 +110,11 @@ export const brickDefinition = createBrickDefinition({
       workspace: { type: "string" },
       nodeBin: { type: "string" },
       rgBin: { type: "string" },
+      skillIndexPath: { type: "string" },
+      tavilyApiKey: { type: "string" },
+      webGatewayBaseUrl: { type: "string" },
+      webGatewayToken: { type: "string" },
+      webMaxResults: { type: "integer", minimum: 1 },
       processExecEnabled: { type: "boolean" },
       maxTimeoutMs: { type: "integer", minimum: 1 },
       maxOutputBytes: { type: "integer", minimum: 1 }

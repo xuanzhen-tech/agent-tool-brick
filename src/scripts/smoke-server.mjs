@@ -1,5 +1,14 @@
+/**
+ * End-to-end smoke test for the local HTTP tool service.
+ *
+ * The test starts the server on a random localhost port, verifies manifest and
+ * call routes, and uses a mock web gateway so web tool behavior is deterministic
+ * without relying on external network services.
+ */
+
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 
@@ -8,9 +17,41 @@ import { createAgentToolServer } from "../main/server.mjs";
 
 const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "agent-tool-server-"));
 await fs.writeFile(path.join(workspace, "server-note.txt"), "server needle", "utf8");
+
+// The skill fixture proves the server can expose skill_find/skill_activate
+// when AGENT_TOOL_SKILL_INDEX points at a valid index file.
+const skillRoot = path.join(workspace, "skills", "server-skill");
+await fs.mkdir(skillRoot, { recursive: true });
+const skillFile = path.join(skillRoot, "SKILL.md");
+await fs.writeFile(skillFile, "---\nname: server-skill\ndescription: Server smoke skill.\n---\n\n# Server Skill\n", "utf8");
+const skillIndexPath = path.join(workspace, "agent-skill.index.json");
+await fs.writeFile(skillIndexPath, JSON.stringify({
+  schemaVersion: "agent-skill.index.v1",
+  generatedAt: new Date().toISOString(),
+  roots: [],
+  skills: [{
+    id: "server-skill",
+    name: "server-skill",
+    description: "Server smoke skill.",
+    path: skillFile,
+    source: "workspace",
+    capabilities: ["smoke"],
+    requiredTools: [],
+    optionalTools: [],
+    requiredEnv: [],
+    enabled: true,
+    contentHash: "smoke",
+    bytes: 80
+  }],
+  diagnostics: []
+}, null, 2), "utf8");
+const webGateway = await createMockWebGateway();
 const config = {
   ...resolveServiceConfig(process.env, {
     workspaceRoot: workspace,
+    skillIndexPath,
+    webGatewayBaseUrl: webGateway.url,
+    webGatewayToken: "smoke-token",
     maxTimeoutMs: 10_000,
     maxOutputBytes: 16_000
   }),
@@ -29,6 +70,8 @@ try {
   const manifest = await getJson(`${url}/api/tools/manifest`);
   assert.equal(manifest.schemaVersion, "agent-cli-tool.manifest.v1");
   assert.equal(manifest.tools.some((tool) => tool.name === "run_shell"), true);
+  assert.equal(manifest.tools.some((tool) => tool.name === "skill_find"), true);
+  assert.equal(manifest.tools.some((tool) => tool.name === "web_search"), true);
 
   const result = await postJson(`${url}/api/tools/call`, {
     schemaVersion: "agent-cli-tool.call.v1",
@@ -66,8 +109,39 @@ try {
   assert.equal(canceled.canceled, true);
   const canceledResult = await pending;
   assert.equal(canceledResult.status, "interrupted");
+
+  const skillResult = await postJson(`${url}/api/tools/call`, {
+    schemaVersion: "agent-cli-tool.call.v1",
+    toolCallId: "server-skill-call",
+    toolName: "skill_activate",
+    arguments: { skill: "server-skill" },
+    workspace: { root: workspace }
+  });
+  assert.equal(skillResult.status, "completed");
+  assert.equal(skillResult.details.loadedSkill.name, "server-skill");
+
+  const webSearch = await postJson(`${url}/api/tools/call`, {
+    schemaVersion: "agent-cli-tool.call.v1",
+    toolCallId: "server-web-search",
+    toolName: "web_search",
+    arguments: { query: "agent tool smoke" },
+    workspace: { root: workspace }
+  });
+  assert.equal(webSearch.status, "completed");
+  assert.match(webSearch.content, /Example Result/);
+
+  const webFetch = await postJson(`${url}/api/tools/call`, {
+    schemaVersion: "agent-cli-tool.call.v1",
+    toolCallId: "server-web-fetch",
+    toolName: "web_fetch",
+    arguments: { url: "https://example.com/article" },
+    workspace: { root: workspace }
+  });
+  assert.equal(webFetch.status, "completed");
+  assert.match(webFetch.content, /Readable body/);
 } finally {
   await runtime.close();
+  await webGateway.close();
 }
 
 console.log("[smoke-server] ok");
@@ -94,4 +168,43 @@ async function postJson(url, body) {
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function createMockWebGateway() {
+  const server = http.createServer(async (request, response) => {
+    const url = new URL(request.url || "/", "http://127.0.0.1");
+    if (request.method === "POST" && url.pathname === "/web/search") {
+      responseJson(response, {
+        results: [{ title: "Example Result", url: "https://example.com/article", snippet: "A smoke result." }]
+      });
+      return;
+    }
+    if (request.method === "POST" && url.pathname === "/web/fetch") {
+      responseJson(response, {
+        title: "Example Article",
+        rawContent: "Readable body from the mock gateway."
+      });
+      return;
+    }
+    response.writeHead(404);
+    response.end();
+  });
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", reject);
+      resolve();
+    });
+  });
+  const address = server.address();
+  const port = typeof address === "object" && address ? address.port : 0;
+  return {
+    url: `http://127.0.0.1:${port}`,
+    close: () => new Promise((resolve) => server.close(() => resolve()))
+  };
+}
+
+function responseJson(response, body) {
+  response.writeHead(200, { "content-type": "application/json; charset=utf-8" });
+  response.end(JSON.stringify(body));
 }
