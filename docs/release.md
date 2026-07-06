@@ -1,19 +1,19 @@
-# Release
+# 发布流程
 
-This repository follows the standard brick workflow:
+本仓库遵循标准 brick 发布流程：
 
 ```text
-validate brick definition
-run smoke tests
-build runtime artifact
-create descriptor.local.json
-publish artifact to OSS
-create descriptor.oss.json
-verify
-publish npm SDK
+校验 brick definition
+运行 smoke 测试
+构建 runtime artifact
+生成 descriptor.local.json
+上传 artifact 到 OSS
+生成 descriptor.oss.json
+执行 verify
+发布 npm SDK
 ```
 
-## Local
+## 本地发布检查
 
 ```bash
 npm run release:local
@@ -21,20 +21,20 @@ npm run release:local
 
 ## GitHub Actions
 
-Inputs:
+输入参数：
 
 ```text
 artifact_mode = skip | placeholder | oss
 publish_npm = false | true
 ```
 
-Required secret for dependency install:
+安装 GitHub Packages 依赖需要：
 
 ```text
 PACKAGES_READ_TOKEN
 ```
 
-Required secrets for `artifact_mode=oss`:
+`artifact_mode=oss` 需要：
 
 ```text
 OSS_BUCKET
@@ -45,9 +45,8 @@ OSS_ACCESS_KEY_SECRET
 OSS_PUBLIC_BASE_URL
 ```
 
-The OSS namespace defaults to:
+默认 OSS namespace：
 
 ```text
 bricks/tool/agent-tool/<version>/
 ```
-

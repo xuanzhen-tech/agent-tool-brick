@@ -1,43 +1,55 @@
-# Agent CLI Integration
+# Agent CLI 集成合同
 
-`agent-cli` should consume `agent-tool` as an external tool provider.
+`agent-cli` 应把 `agent-tool` 作为外部工具提供者消费，而不是内嵌具体工具实现。
 
-## Discovery
+## 发现方式
 
-The host launcher starts `agent-tool serve`, then injects one of:
+对象化集成是当前主路径：
+
+```js
+const agentTool = new AgentTool({ runtimeDependencies, skillRuntime });
+const agent = new AgentCli({ workspace, toolRuntime: agentTool, skillRuntime });
+```
+
+`workspace` 属于 `AgentCli` 的运行上下文，不是 `AgentTool` 产品主入口的必填项。`AgentCli` 在派发工具调用时会把当前 workspace 放入 context，`AgentTool` 只消费这个 context。
+
+服务模式仍可用于 host launcher。host 启动 `agent-tool serve` 后，可向编排器注入：
 
 ```text
 AGENT_CLI_TOOL_ENDPOINT=http://127.0.0.1:8791
-AGENT_CLI_TOOL_MANIFEST=<path or URL to manifest>
+AGENT_CLI_TOOL_MANIFEST=<manifest 文件路径或 URL>
 ```
 
-The preferred v1 path is `AGENT_CLI_TOOL_ENDPOINT`, with `agent-cli` reading:
+v1 推荐使用 `AGENT_CLI_TOOL_ENDPOINT`，再读取：
 
 ```text
 GET /api/tools/manifest
 ```
 
-## Tool Call Flow
+## 工具调用流程
 
-1. `agent-cli` fetches the manifest.
-2. `agent-cli` injects available tool schemas into the model request.
-3. The model emits an OpenAI-compatible tool call.
-4. `agent-cli` owns `threadId`, `runId`, and `toolCallId`.
-5. `agent-cli` calls `POST /api/tools/call`.
-6. `agent-tool` executes and returns `agent-cli-tool.result.v1`.
-7. `agent-cli` writes thread events and maps them to external SSE.
+1. `agent-cli` 从 `toolRuntime.definitions` 或 HTTP manifest 获取工具 schemas。
+2. `agent-cli` 把可用工具 schemas 注入模型请求。
+3. 模型发出 OpenAI-compatible tool call。
+4. `agent-cli` 持有 `threadId`、`runId` 和 `toolCallId`。
+5. 对象模式下，`agent-cli` 调用 `toolRuntime.execute(name, args, context)`。
+6. 服务模式下，`agent-cli` 调用 `POST /api/tools/call`。
+7. `agent-tool` 执行工具并返回 `agent-cli-tool.result.v1`。
+8. `agent-cli` 写入 thread 事件，并映射为外部事件流。
 
-`agent-tool` compresses model-facing tool results before returning them. The response keeps stable status, error, diagnostics, artifacts, and metadata, while large `content` / `details` payloads are summarized with hash, length, head/tail, and important paths. `agent-cli` should treat the returned `content` as the content to send back to the model.
+`agent-tool` 返回前会压缩面向模型的工具结果。响应保留稳定的 status、error、diagnostics、artifacts 和 metadata；大体量 `content` / `details` 会被摘要为 hash、长度、head/tail 和关键路径。`agent-cli` 应把返回的 `content` 当作回填给模型的工具内容。
 
-Shell tools are split by lifecycle:
+## Shell 生命周期
 
-- `run_shell` is a one-shot command and returns only after completion, timeout, or cancel.
-- `exec_command` starts a persistent terminal command and returns quickly with `details.session_id` when the process is still running.
-- `write_stdin` sends input to a persistent session, or polls incremental output when `chars` is empty.
+shell 工具按生命周期拆分：
 
-The orchestrator should prefer `exec_command` / `write_stdin` for dev servers, watchers, REPLs, and commands that may block a model turn.
+- `run_shell` 是一次性命令，直到完成、超时或取消后返回。
+- `exec_command` 启动持续终端命令；如果进程仍在运行，会快速返回 `details.session_id`。
+- `write_stdin` 向持续终端会话写入输入；`chars` 为空时用于轮询增量输出。
 
-Example:
+编排器遇到 dev server、watcher、REPL 或可能阻塞模型 turn 的命令时，应优先使用 `exec_command` / `write_stdin`。
+
+示例：
 
 ```json
 {
@@ -61,9 +73,9 @@ Example:
 }
 ```
 
-## Cancel Flow
+## 取消流程
 
-When `agent-cli` receives chat cancel, it should propagate:
+`agent-cli` 收到 chat cancel 后，应向工具层传播取消信号。服务模式使用：
 
 ```text
 POST /api/tools/cancel
@@ -78,9 +90,9 @@ POST /api/tools/cancel
 }
 ```
 
-`agent-tool` aborts the running process when possible and returns `status: "interrupted"` from the pending call.
+`agent-tool` 会尽力中止运行中的进程，并让 pending call 返回 `status: "interrupted"`。
 
-For a persistent terminal session that has already returned from `exec_command`, cancel by `session_id`:
+如果 `exec_command` 已经返回持续会话，则通过 `session_id` 取消：
 
 ```json
 {
@@ -89,32 +101,32 @@ For a persistent terminal session that has already returned from `exec_command`,
 }
 ```
 
-## Failure Behavior
+## 缺失依赖行为
 
-If `agent-tool` is missing:
+缺少 `agent-tool` 时：
 
-- `agent-cli` still starts.
-- chat without external tools still works.
-- external tool schemas are not injected.
-- diagnostics warns.
+- `agent-cli` 仍可启动。
+- 不需要外部工具的 chat 仍可运行。
+- 外部工具 schemas 不注入。
+- diagnostics 给出 warn。
 
-If `rg` is missing:
+缺少 `rg` 时：
 
-- `agent-tool` still starts.
-- `run_shell` remains available when enabled.
-- `workspace_search` is not exposed.
-- diagnostics warns.
+- `agent-tool` 仍可启动。
+- 启用时 `run_shell` 仍可用。
+- `workspace_search` 不暴露。
+- diagnostics 给出 warn。
 
-If `agent-skill` index is missing:
+缺少 `AgentSkill` 对象或兼容 index 时：
 
-- `agent-tool` still starts.
-- `skill_find` and `skill_activate` are not exposed.
-- diagnostics warns.
+- `agent-tool` 仍可启动。
+- `skill_find` 和 `skill_activate` 不暴露。
+- diagnostics 给出 warn。
 
-When `skill_activate` succeeds, `agent-tool` returns a `loadedSkill` payload. The orchestrator owns persistence, duplicate detection, and rendering that payload into durable skill context.
+`skill_activate` 成功时，`agent-tool` 返回 `loadedSkill` payload。编排器负责持久化、去重，并把该 payload 渲染成可跨轮保留的 skill 上下文。
 
-If web provider config is missing:
+缺少 web provider 配置时：
 
-- `agent-tool` still starts.
-- `web_search` and `web_fetch` are not exposed.
-- diagnostics warns.
+- `agent-tool` 仍可启动。
+- `web_search` 和 `web_fetch` 不暴露。
+- diagnostics 给出 warn。

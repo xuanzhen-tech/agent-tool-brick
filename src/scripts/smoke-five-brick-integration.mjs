@@ -30,14 +30,15 @@ const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "five-brick-product-smo
 try {
   console.log(`[smoke-five-brick-integration] mode ${realKimi ? "real-kimi" : "mock"}`);
   const workspace = path.join(tempRoot, "workspace");
-  await createFixtureSkill(workspace);
+  const managedRoot = path.join(tempRoot, "managed-skills");
+  await createFixtureSkill(managedRoot);
 
   console.log("[smoke-five-brick-integration] expand runtime artifacts");
   const { nodeBin, pythonBin } = await installRuntimeArtifacts(tempRoot);
 
   const agentSkill = new AgentSkill({
     workspace,
-    managedRoot: path.join(tempRoot, "managed-skills")
+    managedRoot
   });
   await agentSkill.refresh({ workspace });
   assert.equal(agentSkill.definitions.some((skill) => skill.name === "python-reporter"), true);
@@ -117,8 +118,8 @@ async function firstExistingPath(candidates, label) {
   throw new Error(`Cannot find ${label}. Set the matching *_REPO environment variable.`);
 }
 
-async function createFixtureSkill(workspace) {
-  const skillDir = path.join(workspace, "skills", "python-reporter");
+async function createFixtureSkill(managedRoot) {
+  const skillDir = path.join(managedRoot, "python-reporter");
   await fs.mkdir(skillDir, { recursive: true });
   await fs.writeFile(path.join(skillDir, "SKILL.md"), [
     "---",

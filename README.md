@@ -1,38 +1,35 @@
 # Agent Tool Brick
 
-`agent-tool` is a standalone tool execution brick. It exposes a local HTTP tool service that an agent orchestrator can discover and call without embedding tool implementations in the orchestrator runtime.
+`agent-tool` 是独立的工具执行积木。它把模型可调用工具封装成对象 API 和可选 HTTP 服务，让编排器不需要内嵌具体工具实现。
 
-## Boundary
+## 能力边界
 
-This brick owns:
+本积木负责：
 
-- tool manifest and tool schemas
-- local tool call endpoint
-- tool diagnostics
-- tool cancel semantics
-- model-facing tool result compression
-- `run_shell`
-- `exec_command` and `write_stdin` for persistent terminal sessions
-- optional `workspace_search` through an injected `rg` runtime
-- optional `skill_find` and `skill_activate` through an injected agent-skill index
-- optional `web_search` and `web_fetch` through Tavily or a generic web gateway
-- optional Python-backed local tool execution through an injected `python-runtime`
+- 工具 manifest 和 OpenAI-compatible tool schemas
+- 本地工具调用入口
+- 工具 diagnostics
+- 工具取消语义
+- 面向模型的工具结果压缩
+- 一次性命令工具 `run_shell`
+- 持续终端会话工具 `exec_command` 和 `write_stdin`
+- 通过注入的 `rg` runtime 暴露可选 `workspace_search`
+- 通过注入的 `AgentSkill` 对象暴露可选 `skill_find` 和 `skill_activate`
+- 通过 Tavily 或通用 web gateway 暴露可选 `web_search` 和 `web_fetch`
+- 通过注入的 `python-runtime` 支持 Python-backed 本地工具执行
 
-This brick does not own:
+本积木不负责：
 
-- model provider calls
-- chat loop orchestration
-- thread storage
-- external SSE formatting
-- desktop UI, installer, updater, or release manifest composition
-- Node, Python, browser, or rg binaries
+- 调用模型 provider
+- 编排 chat loop
+- 存储 thread
+- 对外 SSE 格式
+- 桌面 UI、安装器、更新器或 release manifest 组合
+- 打包 Node、Python、浏览器或 rg 二进制
 
-## Host Entrypoint
+## Host 入口
 
-`agent-tool` includes a command entrypoint so host launchers, release workflows,
-and local smoke tests can start or inspect the tool runtime. It is not a
-user-facing product CLI; the product-facing CLI is expected to be provided by
-the orchestrator brick.
+`agent-tool` 提供命令入口，供 host launcher、release workflow 和本地 smoke 测试启动或检查工具运行时。它不是面向最终用户的产品 CLI；产品侧 CLI 应由编排积木提供。
 
 ```bash
 agent-tool version
@@ -42,34 +39,26 @@ agent-tool manifest --json
 agent-tool serve --host 127.0.0.1 --port 8791
 ```
 
-Direct tool call smoke:
+直接工具调用 smoke：
 
 ```bash
 agent-tool call --tool run_shell --json "{\"mode\":\"process\",\"executable\":\"node\",\"args\":[\"--version\"]}"
 ```
 
-Use `run_shell` for bounded one-shot commands. Use `exec_command` when a command
-may keep running, needs later stdin, or should be polled without blocking the
-agent turn. `exec_command` returns a `session_id` while the process is alive;
-call `write_stdin` with that `session_id` to send input or with empty `chars` to
-poll incremental output.
+`run_shell` 用于有边界的一次性命令。`exec_command` 用于可能持续运行、需要后续 stdin、或需要轮询输出而不阻塞 agent turn 的命令。`exec_command` 会在进程仍运行时返回 `session_id`；随后调用 `write_stdin` 可以写入输入，或传空 `chars` 轮询增量输出。
 
-## SDK Object Usage
+## SDK 对象用法
 
-Product repositories should prefer the object API when composing bricks in
-process. The command entrypoint remains available for release smoke tests and
-host-managed service mode.
+产品仓库组合 brick 时应优先使用对象 API。命令入口继续保留给 release smoke 和 host 管理的服务模式。
 
 ```js
 import { AgentTool } from "@xuanzhen-tech/agent-tool-brick";
 import { AgentSkill } from "@xuanzhen-tech/agent-skill-brick";
 import { AgentCli } from "@xuanzhen-tech/agent-cli-brick";
 
-const agentSkill = new AgentSkill({ env: process.env, workspace });
+const agentSkill = new AgentSkill();
 
 const agentTool = new AgentTool({
-  env: process.env,
-  workspace,
   runtimeDependencies,
   skillRuntime: agentSkill
 });
@@ -83,11 +72,9 @@ const agent = new AgentCli({
 });
 ```
 
-`agentTool.definitions` returns model-facing OpenAI-compatible tool schemas.
-`agentTool.execute(name, args, context)` runs the selected tool and keeps
-persistent terminal sessions inside the `AgentTool` instance. When an
-`AgentSkill` object is injected, `skill_find` and `skill_activate` are exposed
-and delegate skill lookup/activation to that object.
+`agentTool.definitions` 返回面向模型的 OpenAI-compatible tool schemas。`agentTool.execute(name, args, context)` 执行指定工具，并把持续终端会话保存在当前 `AgentTool` 实例内。注入 `AgentSkill` 对象后，`skill_find` 和 `skill_activate` 会暴露给模型，并委托该对象完成 skill 查找和激活。
+
+产品主路径只需要传 `runtimeDependencies` 和 `skillRuntime`。`workspace` 由 `AgentCli` 在每次工具调用时通过 context 传入；`rgBin`、`nodeBin`、`pythonBin` 应统一放进 `runtimeDependencies`；`host`、`port`、`token` 只属于 HTTP 服务模式；`skillIndexPath` 只用于旧文件索引兼容；web provider 和 shell 安全预算应由产品配置层或默认策略统一管理，不应出现在最小启动示例里。
 
 ## HTTP API
 
@@ -99,7 +86,7 @@ POST /api/tools/call
 POST /api/tools/cancel
 ```
 
-Tool calls use `agent-cli-tool.call.v1` and return `agent-cli-tool.result.v1`.
+工具调用使用 `agent-cli-tool.call.v1`，返回 `agent-cli-tool.result.v1`。
 
 ## Runtime Env
 
@@ -125,42 +112,55 @@ AGENT_TOOL_TERMINAL_MAX_OUTPUT_BYTES
 AGENT_TOOL_RESULT_COMPRESSION
 ```
 
-`AGENT_TOOL_RG_BIN` is optional. When rg is unavailable, `workspace_search` is not exposed and diagnostics reports a warning.
+`AGENT_TOOL_RG_BIN` 是可选项。缺少 rg 时，`workspace_search` 不暴露，diagnostics 给出 warn。
 
-`AGENT_TOOL_PYTHON_BIN` is optional. When configured, `run_shell` and `exec_command`
-resolve `executable: "python"`, `"python3"`, or `"py"` to the injected private
-Python runtime and diagnostics verifies that the runtime can import the declared
-generic requirements.
+`AGENT_TOOL_PYTHON_BIN` 是可选项。配置后，`run_shell` 和 `exec_command` 会把 `executable: "python"`、`"python3"` 或 `"py"` 解析到注入的私有 Python runtime；diagnostics 会验证该 runtime 能导入声明的通用依赖。
 
-`AGENT_TOOL_SKILL_INDEX` is optional for service mode. In object mode,
-inject an `AgentSkill` instance through `skillRuntime` to expose `skill_find`
-and `skill_activate`.
+`AGENT_TOOL_SKILL_INDEX` 只用于服务模式兼容。对象模式下应通过 `skillRuntime` 注入 `AgentSkill` 实例来暴露 `skill_find` 和 `skill_activate`。
 
-Web tools are optional. Configure `AGENT_TOOL_TAVILY_API_KEY` or `AGENT_TOOL_WEB_GATEWAY_BASE_URL` plus `AGENT_TOOL_WEB_GATEWAY_TOKEN` to expose `web_search` and `web_fetch`.
+web 工具是可选项。配置 `AGENT_TOOL_TAVILY_API_KEY`，或配置 `AGENT_TOOL_WEB_GATEWAY_BASE_URL` 和 `AGENT_TOOL_WEB_GATEWAY_TOKEN` 后，才会暴露 `web_search` 和 `web_fetch`。
 
-Tool result compression is enabled by default. Set `AGENT_TOOL_RESULT_COMPRESSION=off` only for debugging raw tool output.
+工具结果压缩默认启用。只有调试原始工具输出时才应设置 `AGENT_TOOL_RESULT_COMPRESSION=off`。
 
-## Local Verification
+## 五件套验收
+
+本仓库包含五个 brick 的组合 smoke：
+
+```bash
+npm run smoke:five-brick-integration
+```
+
+真实 Kimi provider 验收：
+
+```powershell
+$env:AGENT_CLI_KIMI_API_KEY="<one-time-key>"
+npm run smoke:five-brick-kimi
+Remove-Item Env:AGENT_CLI_KIMI_API_KEY -ErrorAction SilentlyContinue
+```
+
+该 smoke 会组合 `agent-cli`、`agent-tool`、`agent-skill`、`node-runtime` 和 `python-runtime`，验证 skill prompt、`skill_find`、`skill_activate`、`loadedSkill`、`run_shell` 和注入 Python runtime 的完整链路。
+
+## 本地验证
 
 ```bash
 npm install
 npm run release:local
 ```
 
-`release:local` covers command-entrypoint smoke, contract smoke, tool smoke, server smoke, artifact build, descriptor generation, placeholder publish, verification, and package shape.
+`release:local` 覆盖命令入口 smoke、contract smoke、tool smoke、server smoke、artifact 构建、descriptor 生成、placeholder publish、verify 和 package 形状。
 
-## Artifact
+## 产物
 
-The runtime artifact is a `win32-x64` zip:
+runtime artifact 是 `win32-x64` zip：
 
 ```text
-dist/agent-tool-0.1.2-win32-x64.zip
+dist/agent-tool-0.1.3-win32-x64.zip
 dist/build-artifact.json
 dist/descriptor.local.json
 dist/descriptor.oss.placeholder.json
 ```
 
-The descriptor uses:
+descriptor 使用：
 
 ```text
 type: tool
@@ -168,4 +168,4 @@ slot: tool:agent-tool
 install.command: agent-tool serve
 ```
 
-The artifact intentionally excludes Node, Python, Playwright browsers, rg binaries, `.env`, UI code, and host-specific config files.
+artifact 刻意不包含 Node、Python、Playwright browsers、rg 二进制、`.env`、UI 代码和 host 专属配置。
