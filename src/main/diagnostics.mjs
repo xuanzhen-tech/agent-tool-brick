@@ -6,15 +6,35 @@
  */
 
 import fs from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 
 import { brickDefinition } from "../brick-definition.mjs";
 import { isRgAvailable } from "./search-runtime.mjs";
 import { isSkillIndexAvailable } from "./skill-runtime.mjs";
 import { isWebProviderAvailable } from "./web-runtime.mjs";
 
+const execFileAsync = promisify(execFile);
+// 与 python-runtime 的通用 requirements 保持一致，用于确认注入的解释器不仅存在，而且具备工具层需要的基础包。
+const PYTHON_REQUIREMENT_MODULES = Object.freeze([
+  "fitz",
+  "numpy",
+  "PIL",
+  "pandas",
+  "pydantic",
+  "pypdf",
+  "yaml",
+  "dotenv",
+  "requests",
+  "openpyxl",
+  "docx",
+  "pptx"
+]);
+
 export async function createDiagnosticsReport(config, options = {}) {
   const checks = [];
   checks.push(createNodeRuntimeCheck(config));
+  checks.push(await createPythonRuntimeCheck(config));
   checks.push(createProcessExecCheck(config));
   checks.push(createTerminalSessionCheck(config, options.terminalManager));
   checks.push(await createRgRuntimeCheck(config));
@@ -36,6 +56,52 @@ export async function createDiagnosticsReport(config, options = {}) {
     },
     status,
     checks
+  };
+}
+
+async function createPythonRuntimeCheck(config) {
+  if (!config.pythonBin) {
+    return {
+      id: "python.runtime",
+      status: "skip",
+      summary: "python-runtime is optional and not injected.",
+      detail: "Set AGENT_TOOL_PYTHON_BIN or pass runtimeDependencies[{ type: 'python-runtime', bin }]."
+    };
+  }
+
+  const access = await pathAccess(config.pythonBin);
+  if (!access.ok) {
+    return {
+      id: "python.runtime",
+      status: "fail",
+      summary: "Configured Python executable is not accessible.",
+      detail: config.pythonBin
+    };
+  }
+
+  // 用独立 Python 进程探测依赖，避免误用当前 Node 进程或开发机全局环境。
+  const code = [
+    "import importlib, json, sys",
+    `modules = ${JSON.stringify(PYTHON_REQUIREMENT_MODULES)}`,
+    "if sys.platform.startswith('win'): modules.append('winocr')",
+    "missing = []",
+    "for name in modules:",
+    "    try:",
+    "        importlib.import_module(name)",
+    "    except Exception as exc:",
+    "        missing.append({'module': name, 'error': str(exc)})",
+    "print(json.dumps({'executable': sys.executable, 'version': sys.version.split()[0], 'missing': missing}, ensure_ascii=False))"
+  ].join("\n");
+  const command = await runCommand(config.pythonBin, ["-s", "-c", code]);
+  const parsed = parseJsonObject(command.stdout);
+  const missing = Array.isArray(parsed.missing) ? parsed.missing : [];
+  return {
+    id: "python.runtime",
+    status: command.exitCode === 0 && missing.length === 0 ? "pass" : "fail",
+    summary: command.exitCode === 0 && missing.length === 0
+      ? "Injected Python runtime can import declared requirements."
+      : "Injected Python runtime is missing one or more declared requirements.",
+    detail: command.stdout || command.stderr || config.pythonBin
   };
 }
 
@@ -171,6 +237,48 @@ async function createRgRuntimeCheck(config) {
     summary: "rg tool runtime is not available; workspace_search will not be exposed.",
     detail: availability.detail || availability.command
   };
+}
+
+async function runCommand(command, args) {
+  try {
+    const { stdout, stderr } = await execFileAsync(command, args, {
+      timeout: 60_000,
+      windowsHide: true,
+      maxBuffer: 20 * 1024 * 1024,
+      env: {
+        ...process.env,
+        PYTHONIOENCODING: "utf-8",
+        PYTHONUTF8: "1",
+        PYTHONNOUSERSITE: "1"
+      }
+    });
+    return { exitCode: 0, stdout: clip(stdout), stderr: clip(stderr) };
+  } catch (error) {
+    return {
+      exitCode: error?.code ?? null,
+      stdout: clip(error?.stdout ?? ""),
+      stderr: clip(error?.stderr || formatError(error))
+    };
+  }
+}
+
+// diagnostics 不应因异常输出崩溃；解析失败时返回空对象，由上层给出 fail/warn。
+function parseJsonObject(value) {
+  try {
+    const parsed = JSON.parse(String(value ?? "").trim());
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function clip(value) {
+  const text = String(value ?? "");
+  return text.length > 20_000 ? `${text.slice(0, 20_000)}\n[truncated]` : text;
+}
+
+function formatError(error) {
+  return error instanceof Error ? error.message : String(error);
 }
 
 async function pathAccess(filePath) {

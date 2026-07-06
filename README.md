@@ -16,6 +16,7 @@ This brick owns:
 - optional `workspace_search` through an injected `rg` runtime
 - optional `skill_find` and `skill_activate` through an injected agent-skill index
 - optional `web_search` and `web_fetch` through Tavily or a generic web gateway
+- optional Python-backed local tool execution through an injected `python-runtime`
 
 This brick does not own:
 
@@ -108,6 +109,7 @@ AGENT_TOOL_PORT
 AGENT_TOOL_TOKEN
 AGENT_TOOL_WORKSPACE_ROOT
 AGENT_TOOL_NODE_BIN
+AGENT_TOOL_PYTHON_BIN
 AGENT_TOOL_RG_BIN
 AGENT_TOOL_SKILL_INDEX
 AGENT_TOOL_TAVILY_API_KEY
@@ -124,6 +126,11 @@ AGENT_TOOL_RESULT_COMPRESSION
 ```
 
 `AGENT_TOOL_RG_BIN` is optional. When rg is unavailable, `workspace_search` is not exposed and diagnostics reports a warning.
+
+`AGENT_TOOL_PYTHON_BIN` is optional. When configured, `run_shell` and `exec_command`
+resolve `executable: "python"`, `"python3"`, or `"py"` to the injected private
+Python runtime and diagnostics verifies that the runtime can import the declared
+generic requirements.
 
 `AGENT_TOOL_SKILL_INDEX` is optional for service mode. In object mode,
 inject an `AgentSkill` instance through `skillRuntime` to expose `skill_find`

@@ -69,7 +69,7 @@ class TerminalSessionManager {
       return blockedResult(error.code || "workspace_path_denied", error.message);
     }
 
-    const commandSpec = args.argv ? buildProcessCommandSpec(args.argv) : buildShellCommandSpec(args.cmd);
+    const commandSpec = args.argv ? buildProcessCommandSpec(args.argv, config) : buildShellCommandSpec(args.cmd);
     let session;
     try {
       session = this.spawnSession({
@@ -371,8 +371,18 @@ function resolveCommandCwd(call, config, workdir) {
   return resolveInsideWorkspace(workspaceRoot, workdir || ".").absolutePath;
 }
 
-function buildProcessCommandSpec(argv) {
-  return { executable: argv[0] ?? "", args: argv.slice(1) };
+function buildProcessCommandSpec(argv, config = {}) {
+  return { executable: resolveProcessExecutable(argv[0], config), args: argv.slice(1) };
+}
+
+function resolveProcessExecutable(executable, config = {}) {
+  const command = executable ?? "";
+  const normalized = String(command).trim().toLowerCase();
+  // 与 run_shell 保持一致：注入 python-runtime 后，python/python3/py 指向私有解释器。
+  if ((normalized === "python" || normalized === "python3" || normalized === "py") && config.pythonBin) {
+    return config.pythonBin;
+  }
+  return command;
 }
 
 function readIncrementalChannel(session, key) {

@@ -42,7 +42,7 @@ export async function executeRunShell(call, config, signal) {
   const cwd = path.resolve(getWorkspaceRootFromCall(call, config));
   const timeoutMs = clampTimeout(args.timeoutMs ?? call.limits?.timeoutMs ?? DEFAULT_TIMEOUT_MS, config.maxTimeoutMs);
   const maxOutputBytes = clampOutputBytes(call.limits?.maxOutputChars ?? config.maxOutputBytes, config.maxOutputBytes);
-  const commandSpec = args.argv ? buildProcessCommandSpec(args.argv) : buildShellCommandSpec(args.command);
+  const commandSpec = args.argv ? buildProcessCommandSpec(args.argv, config) : buildShellCommandSpec(args.command);
   const result = await runProcess({
     executable: commandSpec.executable,
     args: commandSpec.args,
@@ -125,8 +125,18 @@ function normalizeRunShellArguments(params) {
   };
 }
 
-function buildProcessCommandSpec(argv) {
-  return { executable: argv[0] ?? "", args: argv.slice(1) };
+function buildProcessCommandSpec(argv, config = {}) {
+  return { executable: resolveProcessExecutable(argv[0], config), args: argv.slice(1) };
+}
+
+function resolveProcessExecutable(executable, config = {}) {
+  const command = executable ?? "";
+  const normalized = String(command).trim().toLowerCase();
+  // Python runtime 由 host 注入给 agent-tool；模型仍然可以使用通用的 python/python3 名称。
+  if ((normalized === "python" || normalized === "python3" || normalized === "py") && config.pythonBin) {
+    return config.pythonBin;
+  }
+  return command;
 }
 
 export function buildShellCommandSpec(command) {

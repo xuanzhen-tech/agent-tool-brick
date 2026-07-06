@@ -282,6 +282,22 @@ assert.equal(objectSkill.status, "completed");
 assert.equal(objectSkill.details.loadedSkill.name, "brief-writer");
 await objectTool.dispose();
 
+const pythonAliasTool = new AgentTool({
+  workspace,
+  processExecEnabled: true,
+  pythonBin: process.execPath,
+  maxTimeoutMs: 5_000,
+  maxOutputBytes: 8_000
+});
+const pythonAlias = await pythonAliasTool.execute("run_shell", {
+  mode: "process",
+  executable: "python",
+  args: ["-e", "console.log('python-alias-ok')"]
+}, { workspace });
+assert.equal(pythonAlias.status, "completed");
+assert.match(pythonAlias.details.stdout, /python-alias-ok/);
+await pythonAliasTool.dispose();
+
 console.log("[smoke-tools] ok");
 
 function wait(ms) {

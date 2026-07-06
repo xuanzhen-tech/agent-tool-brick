@@ -35,7 +35,8 @@ export class AgentTool {
       ...input,
       workspaceRoot: input.workspaceRoot ?? input.workspace,
       rgBin: input.rgBin ?? resolveInjectedBin(this.runtimeDependencies, ["tool:rg", "rg"]),
-      nodeBin: input.nodeBin ?? resolveInjectedBin(this.runtimeDependencies, ["node-runtime", "node"])
+      nodeBin: input.nodeBin ?? resolveInjectedBin(this.runtimeDependencies, ["node-runtime", "node"]),
+      pythonBin: input.pythonBin ?? resolveInjectedBin(this.runtimeDependencies, ["python-runtime", "python"])
     });
     this.terminalManager = createTerminalSessionManager(this.config);
     this.registryPromise = undefined;

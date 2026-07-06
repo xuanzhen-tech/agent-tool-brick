@@ -25,6 +25,7 @@ export function createAgentToolLaunchConfig(input = {}) {
   setEnv(env, "AGENT_TOOL_PORT", String(port));
   setEnv(env, "AGENT_TOOL_WORKSPACE_ROOT", input.workspace);
   setEnv(env, "AGENT_TOOL_NODE_BIN", input.nodeBin);
+  setEnv(env, "AGENT_TOOL_PYTHON_BIN", input.pythonBin);
   setEnv(env, "AGENT_TOOL_RG_BIN", input.rgBin);
   setEnv(env, "AGENT_TOOL_TOKEN", input.token);
   setEnv(env, "AGENT_TOOL_SKILL_INDEX", input.skillIndexPath);
@@ -102,6 +103,7 @@ export function createAgentToolRuntimeContract(input = {}) {
       token: "AGENT_TOOL_TOKEN",
       workspaceRoot: "AGENT_TOOL_WORKSPACE_ROOT",
       nodeBin: "AGENT_TOOL_NODE_BIN",
+      pythonBin: "AGENT_TOOL_PYTHON_BIN",
       rgBin: "AGENT_TOOL_RG_BIN",
       skillIndex: "AGENT_TOOL_SKILL_INDEX",
       tavilyApiKey: "AGENT_TOOL_TAVILY_API_KEY",
@@ -130,6 +132,10 @@ export function createAgentToolRuntimeContract(input = {}) {
           id: "rg",
           version: "15.1.0",
           injectedEnv: "AGENT_TOOL_RG_BIN"
+        },
+        {
+          type: "python-runtime",
+          injectedEnv: "AGENT_TOOL_PYTHON_BIN"
         }
       ]
     }
@@ -146,6 +152,7 @@ export function resolveServiceConfig(env = process.env, overrides = {}) {
     token: firstNonEmpty(overrides.token, env.AGENT_TOOL_TOKEN),
     workspaceRoot: firstNonEmpty(overrides.workspaceRoot, env.AGENT_TOOL_WORKSPACE_ROOT),
     nodeBin: firstNonEmpty(overrides.nodeBin, env.AGENT_TOOL_NODE_BIN),
+    pythonBin: firstNonEmpty(overrides.pythonBin, env.AGENT_TOOL_PYTHON_BIN, env.AGENT_CLI_PYTHON_BIN),
     rgBin: firstNonEmpty(overrides.rgBin, env.AGENT_TOOL_RG_BIN),
     skillIndexPath: firstNonEmpty(overrides.skillIndexPath, env.AGENT_TOOL_SKILL_INDEX),
     tavilyApiKey: firstNonEmpty(overrides.tavilyApiKey, env.AGENT_TOOL_TAVILY_API_KEY, env.TAVILY_API_KEY),

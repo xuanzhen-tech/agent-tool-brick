@@ -27,25 +27,30 @@ import { createToolResult } from "../main/tool-contract.mjs";
 
 assert.equal(brickDefinition.id, "agent-tool");
 assert.equal(brickDefinition.kind, "tool");
-assert.equal(brickDefinition.version, "0.1.2");
+assert.equal(brickDefinition.version, "0.1.3");
 assert.equal(validateBrickDefinition(brickDefinition).ok, true);
 assert.equal(brickDefinition.runtimeDependencies.some((item) => item.type === "node-runtime" && item.required === true), true);
 assert.equal(brickDefinition.runtimeDependencies.some((item) => item.slot === "tool:rg" && item.required === false), true);
+assert.equal(brickDefinition.runtimeDependencies.some((item) => item.type === "python-runtime" && item.required === false), true);
 assert.equal(brickDefinition.capabilities.some((item) => item.id === "agent-tool.terminal-session"), true);
 assert.equal(brickDefinition.capabilities.some((item) => item.id === "agent-tool.skill-tools"), true);
 assert.equal(brickDefinition.capabilities.some((item) => item.id === "agent-tool.web"), true);
+assert.equal(brickDefinition.capabilities.some((item) => item.id === "agent-tool.python-runtime"), true);
 
-const launchConfig = createAgentToolLaunchConfig({ port: 8791, workspace: process.cwd(), rgBin: "rg" });
+const launchConfig = createAgentToolLaunchConfig({ port: 8791, workspace: process.cwd(), rgBin: "rg", pythonBin: "python" });
 assert.equal(validateAgentToolLaunchConfig(launchConfig).ok, true);
 assert.equal(launchConfig.env.AGENT_TOOL_WORKSPACE_ROOT, process.cwd());
+assert.equal(launchConfig.env.AGENT_TOOL_PYTHON_BIN, "python");
 
 const runtimeContract = createAgentToolRuntimeContract({ platform: "win32-x64" });
 assert.equal(runtimeContract.schemaVersion, "agent-tool.runtime.v1");
 assert.equal(runtimeContract.command, "agent-tool");
 assert.equal(runtimeContract.env.resultCompression, "AGENT_TOOL_RESULT_COMPRESSION");
 assert.equal(runtimeContract.env.terminalSessionTtlMs, "AGENT_TOOL_TERMINAL_SESSION_TTL_MS");
+assert.equal(runtimeContract.env.pythonBin, "AGENT_TOOL_PYTHON_BIN");
 assert.equal(runtimeContract.runtimeDependencies.required[0].type, "node-runtime");
 assert.equal(runtimeContract.runtimeDependencies.optional[0].slot, "tool:rg");
+assert.equal(runtimeContract.runtimeDependencies.optional.some((item) => item.type === "python-runtime"), true);
 
 const agentTool = new AgentTool({
   workspace: process.cwd(),

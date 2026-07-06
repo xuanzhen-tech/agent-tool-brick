@@ -164,6 +164,9 @@ async function validateRuntimeArtifactIfPresent() {
   if (!runtimeContract.runtimeDependencies?.optional?.some((dependency) => dependency.slot === "tool:rg")) {
     throw new Error("runtime-contract.json must declare tool:rg as optional");
   }
+  if (!runtimeContract.runtimeDependencies?.optional?.some((dependency) => dependency.type === "python-runtime")) {
+    throw new Error("runtime-contract.json must declare python-runtime as optional");
+  }
 
   await assertRuntimeFilesDoNotContainSecrets(runtimeFiles);
   console.log("[verify] runtime artifact ok", metadata.artifactFileName);

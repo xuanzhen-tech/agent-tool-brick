@@ -16,7 +16,7 @@ import { fileURLToPath } from "node:url";
 
 const BRICK_ID = "agent-tool";
 const BRICK_NAME = "Agent Tool";
-const BRICK_VERSION = "0.1.2";
+const BRICK_VERSION = "0.1.3";
 const BRICK_KIND = "tool";
 
 const toolServiceCapability = createBrickCapability({
@@ -70,6 +70,15 @@ const webToolsCapability = createBrickCapability({
   optional: true
 });
 
+const pythonRuntimeCapability = createBrickCapability({
+  id: "agent-tool.python-runtime",
+  name: "Python Runtime Binding",
+  type: "runtime",
+  description: "Consumes an injected python-runtime executable for Python-backed local tools and smoke checks.",
+  requires: ["node-runtime", "python-runtime"],
+  optional: true
+});
+
 export const brickDefinition = createBrickDefinition({
   id: BRICK_ID,
   name: BRICK_NAME,
@@ -114,7 +123,8 @@ export const brickDefinition = createBrickDefinition({
     terminalCapability,
     workspaceSearchCapability,
     skillToolsCapability,
-    webToolsCapability
+    webToolsCapability,
+    pythonRuntimeCapability
   ],
   configSchema: {
     type: "object",
@@ -123,6 +133,7 @@ export const brickDefinition = createBrickDefinition({
       port: { type: "integer", minimum: 1, maximum: 65535 },
       workspace: { type: "string" },
       nodeBin: { type: "string" },
+      pythonBin: { type: "string" },
       rgBin: { type: "string" },
       skillIndexPath: { type: "string" },
       tavilyApiKey: { type: "string" },
@@ -150,6 +161,11 @@ export const brickDefinition = createBrickDefinition({
       version: "15.1.0",
       required: false,
       injectedEnv: "AGENT_TOOL_RG_BIN"
+    },
+    {
+      type: "python-runtime",
+      required: false,
+      injectedEnv: "AGENT_TOOL_PYTHON_BIN"
     }
   ]
 });
