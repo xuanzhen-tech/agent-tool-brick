@@ -33,6 +33,8 @@
     "publish:npm": "npm publish",
     "release:local": "npm run smoke:cli && npm run smoke:contract && npm run smoke:tools && npm run smoke:server && npm run build:artifact && npm run create:descriptor && npm run publish:artifact:placeholder && npm run verify && npm run pack:dry-run",
     "smoke:agent-cli-runtime-integration": "node src/scripts/smoke-agent-cli-runtime-integration.mjs",
+    "smoke:five-brick-integration": "node src/scripts/smoke-five-brick-integration.mjs",
+    "smoke:five-brick-kimi": "node src/scripts/smoke-five-brick-integration.mjs --real-kimi",
     "smoke:cli": "node src/cli.mjs version && node src/cli.mjs health --json && node src/cli.mjs diagnostics --json && node src/cli.mjs manifest --json",
     "smoke:contract": "node src/scripts/smoke-contract.mjs",
     "smoke:server": "node src/scripts/smoke-server.mjs",
