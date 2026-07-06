@@ -11,6 +11,7 @@ import path from "node:path";
 
 import { numberField, stringField } from "./env.mjs";
 import { appendOutput, formatCommandPartForAudit, killProcessTree } from "./process-runtime.mjs";
+import { buildRuntimeProcessEnv, resolveRuntimeProcessExecutable } from "./runtime-process-env.mjs";
 import { buildShellCommandSpec } from "./shell-runtime.mjs";
 import { getWorkspaceRootFromCall, resolveInsideWorkspace } from "./workspace.mjs";
 
@@ -195,11 +196,7 @@ class TerminalSessionManager {
 
     const child = spawn(commandSpec.executable, commandSpec.args, {
       cwd,
-      env: {
-        ...process.env,
-        PYTHONIOENCODING: "utf-8",
-        PYTHONUTF8: "1"
-      },
+      env: buildRuntimeProcessEnv(this.config),
       windowsHide: true,
       shell: false
     });
@@ -376,13 +373,7 @@ function buildProcessCommandSpec(argv, config = {}) {
 }
 
 function resolveProcessExecutable(executable, config = {}) {
-  const command = executable ?? "";
-  const normalized = String(command).trim().toLowerCase();
-  // 与 run_shell 保持一致：注入 python-runtime 后，python/python3/py 指向私有解释器。
-  if ((normalized === "python" || normalized === "python3" || normalized === "py") && config.pythonBin) {
-    return config.pythonBin;
-  }
-  return command;
+  return resolveRuntimeProcessExecutable(executable, config);
 }
 
 function readIncrementalChannel(session, key) {

@@ -9,6 +9,7 @@ import path from "node:path";
 
 import { numberField, stringField } from "./env.mjs";
 import { formatCommandPartForAudit, runProcess } from "./process-runtime.mjs";
+import { buildRuntimeProcessEnv, resolveRuntimeProcessExecutable } from "./runtime-process-env.mjs";
 import { getWorkspaceRootFromCall } from "./workspace.mjs";
 
 const DEFAULT_TIMEOUT_MS = 20_000;
@@ -51,11 +52,7 @@ export async function executeRunShell(call, config, signal) {
     timeoutMs,
     maxOutputBytes,
     signal,
-    env: {
-      ...process.env,
-      PYTHONIOENCODING: "utf-8",
-      PYTHONUTF8: "1"
-    }
+    env: buildRuntimeProcessEnv(config)
   });
 
   const details = {
@@ -130,13 +127,7 @@ function buildProcessCommandSpec(argv, config = {}) {
 }
 
 function resolveProcessExecutable(executable, config = {}) {
-  const command = executable ?? "";
-  const normalized = String(command).trim().toLowerCase();
-  // Python runtime 由 host 注入给 agent-tool；模型仍然可以使用通用的 python/python3 名称。
-  if ((normalized === "python" || normalized === "python3" || normalized === "py") && config.pythonBin) {
-    return config.pythonBin;
-  }
-  return command;
+  return resolveRuntimeProcessExecutable(executable, config);
 }
 
 export function buildShellCommandSpec(command) {
