@@ -1,9 +1,10 @@
 /**
  * AgentTool 对象化运行时入口。
  *
- * 本文件把已有的工具 registry、终端会话、搜索、web 和 skill 适配能力封装成
- * 一个可被 AgentCli 直接注入的对象。产品仓库只需要 new AgentTool，不需要理解
- * HTTP 服务、manifest 文件或内部工具实现。
+ * 本文件把工具 registry、终端会话、搜索、web 和 skill 适配能力封装成
+ * 一个可被 AgentCli 直接注入的对象。对象主接口只接收 workspace、
+ * runtimeDependencies 和 skillRuntime，其它 provider、限流和服务细节都留在
+ * 积木内部默认策略或 host 服务模式里。
  */
 
 import { brickDefinition } from "../brick-definition.mjs";
@@ -27,16 +28,15 @@ const TOOL_CALL_SCHEMA_VERSION = "agent-cli-tool.call.v1";
 
 export class AgentTool {
   constructor(input = {}) {
-    this.env = input.env ?? process.env;
-    this.workspace = input.workspace;
-    this.runtimeDependencies = normalizeRuntimeDependencies(input.runtimeDependencies);
-    this.skillRuntime = input.skillRuntime;
-    this.config = resolveServiceConfig(this.env, {
-      ...input,
-      workspaceRoot: input.workspaceRoot ?? input.workspace,
-      rgBin: input.rgBin ?? resolveInjectedBin(this.runtimeDependencies, ["tool:rg", "rg"]),
-      nodeBin: input.nodeBin ?? resolveInjectedBin(this.runtimeDependencies, ["node-runtime", "node"]),
-      pythonBin: input.pythonBin ?? resolveInjectedBin(this.runtimeDependencies, ["python-runtime", "python"])
+    const normalizedInput = normalizeConstructorInput(input);
+    this.workspace = normalizedInput.workspace;
+    this.runtimeDependencies = normalizeRuntimeDependencies(normalizedInput.runtimeDependencies);
+    this.skillRuntime = normalizedInput.skillRuntime;
+    this.config = resolveServiceConfig(process.env, {
+      workspaceRoot: normalizedInput.workspace,
+      rgBin: resolveInjectedBin(this.runtimeDependencies, ["tool:rg", "rg"]),
+      nodeBin: resolveInjectedBin(this.runtimeDependencies, ["node-runtime", "node"]),
+      pythonBin: resolveInjectedBin(this.runtimeDependencies, ["python-runtime", "python"])
     });
     this.terminalManager = createTerminalSessionManager(this.config);
     this.registryPromise = undefined;
@@ -128,6 +128,17 @@ export class AgentTool {
       return failedResult("skill.failed", error instanceof Error ? error.message : String(error));
     }
   }
+}
+
+function normalizeConstructorInput(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    return {};
+  }
+  return {
+    workspace: input.workspace,
+    runtimeDependencies: input.runtimeDependencies,
+    skillRuntime: input.skillRuntime
+  };
 }
 
 function selectModelToolSchemas({ config, runtimeDependencies, skillRuntime }) {

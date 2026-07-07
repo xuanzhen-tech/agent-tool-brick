@@ -54,10 +54,7 @@ try {
     runtimeDependencies: [
       { type: "node-runtime", bin: nodeBin },
       { type: "python-runtime", bin: pythonBin }
-    ],
-    processExecEnabled: true,
-    maxTimeoutMs: 30_000,
-    maxOutputBytes: 20_000
+    ]
   });
   const toolDiagnostics = await agentTool.diagnostics({ workspace });
   assert.equal(toolDiagnostics.checks.find((check) => check.id === "python.runtime")?.status, "pass");

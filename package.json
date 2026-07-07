@@ -1,6 +1,6 @@
 {
   "name": "@xuanzhen-tech/agent-tool-brick",
-  "version": "0.1.4",
+  "version": "0.2.0",
   "description": "Agent tool execution brick with a local tool service boundary.",
   "type": "module",
   "repository": {

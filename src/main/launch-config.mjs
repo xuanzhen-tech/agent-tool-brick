@@ -19,14 +19,15 @@ const DEFAULT_TERMINAL_MAX_OUTPUT_BYTES = 256 * 1024;
 export function createAgentToolLaunchConfig(input = {}) {
   const host = input.host ?? DEFAULT_HOST;
   const port = normalizePort(input.port ?? DEFAULT_PORT);
+  const runtimeDependencies = normalizeRuntimeDependencies(input.runtimeDependencies);
   const env = {};
 
   setEnv(env, "AGENT_TOOL_HOST", host);
   setEnv(env, "AGENT_TOOL_PORT", String(port));
   setEnv(env, "AGENT_TOOL_WORKSPACE_ROOT", input.workspace);
-  setEnv(env, "AGENT_TOOL_NODE_BIN", input.nodeBin);
-  setEnv(env, "AGENT_TOOL_PYTHON_BIN", input.pythonBin);
-  setEnv(env, "AGENT_TOOL_RG_BIN", input.rgBin);
+  setEnv(env, "AGENT_TOOL_NODE_BIN", input.nodeBin ?? resolveInjectedBin(runtimeDependencies, ["node-runtime", "node"]));
+  setEnv(env, "AGENT_TOOL_PYTHON_BIN", input.pythonBin ?? resolveInjectedBin(runtimeDependencies, ["python-runtime", "python"]));
+  setEnv(env, "AGENT_TOOL_RG_BIN", input.rgBin ?? resolveInjectedBin(runtimeDependencies, ["tool:rg", "rg"]));
   setEnv(env, "AGENT_TOOL_TOKEN", input.token);
   setEnv(env, "AGENT_TOOL_SKILL_INDEX", input.skillIndexPath);
   setEnv(env, "AGENT_TOOL_TAVILY_API_KEY", input.tavilyApiKey);
@@ -181,4 +182,23 @@ function setEnv(env, key, value) {
   if (value !== undefined && value !== null && String(value).trim()) {
     env[key] = String(value);
   }
+}
+
+function normalizeRuntimeDependencies(value) {
+  if (Array.isArray(value)) return value;
+  if (!value || typeof value !== "object") return [];
+  return Object.entries(value).map(([key, dependency]) => ({
+    key,
+    ...(dependency && typeof dependency === "object" ? dependency : { value: dependency })
+  }));
+}
+
+function resolveInjectedBin(dependencies, candidates) {
+  const dependency = dependencies.find((item) => {
+    const values = [item.key, item.slot, item.id, item.type, item.name]
+      .filter(Boolean)
+      .map((value) => String(value).toLowerCase());
+    return candidates.some((candidate) => values.includes(candidate.toLowerCase()));
+  });
+  return dependency?.bin ?? dependency?.path ?? dependency?.executable ?? dependency?.value;
 }

@@ -2,8 +2,8 @@
  * agent-tool 的公开积木定义。
  *
  * 这个定义是面向 baseLine、产品仓库和发布工具的合同。它声明
- * 当前积木提供哪些能力、依赖哪些运行时，以及 host launcher 可以
- * 注入哪些配置项。
+ * 当前积木提供哪些能力、依赖哪些运行时，以及对象化 SDK 的最小配置面。
+ * HTTP 服务模式仍有独立 runtime contract，但不再污染产品主构造函数。
  */
 
 import {
@@ -16,7 +16,7 @@ import { fileURLToPath } from "node:url";
 
 const BRICK_ID = "agent-tool";
 const BRICK_NAME = "Agent Tool";
-const BRICK_VERSION = "0.1.4";
+const BRICK_VERSION = "0.2.0";
 const BRICK_KIND = "tool";
 
 const toolServiceCapability = createBrickCapability({
@@ -56,8 +56,8 @@ const skillToolsCapability = createBrickCapability({
   id: "agent-tool.skill-tools",
   name: "Skill Discovery And Activation Tools",
   type: "tool",
-  description: "Finds indexed skills and returns loadedSkill activation payloads from an injected agent-skill index.",
-  requires: ["node-runtime", "agent-skill:index"],
+  description: "Finds skills and returns loadedSkill activation payloads through an injected AgentSkill object.",
+  requires: ["node-runtime", "agent-skill"],
   optional: true
 });
 
@@ -129,23 +129,7 @@ export const brickDefinition = createBrickDefinition({
   configSchema: {
     type: "object",
     properties: {
-      host: { type: "string" },
-      port: { type: "integer", minimum: 1, maximum: 65535 },
-      workspace: { type: "string" },
-      nodeBin: { type: "string" },
-      pythonBin: { type: "string" },
-      rgBin: { type: "string" },
-      skillIndexPath: { type: "string" },
-      tavilyApiKey: { type: "string" },
-      webGatewayBaseUrl: { type: "string" },
-      webGatewayToken: { type: "string" },
-      webMaxResults: { type: "integer", minimum: 1 },
-      processExecEnabled: { type: "boolean" },
-      maxTimeoutMs: { type: "integer", minimum: 1 },
-      maxOutputBytes: { type: "integer", minimum: 1 },
-      terminalSessionTtlMs: { type: "integer", minimum: 1 },
-      terminalMaxSessions: { type: "integer", minimum: 1 },
-      terminalMaxOutputBytes: { type: "integer", minimum: 1 }
+      workspace: { type: "string" }
     }
   },
   runtimeDependencies: [

@@ -59,6 +59,7 @@ import { AgentCli } from "@xuanzhen-tech/agent-cli-brick";
 const agentSkill = new AgentSkill();
 
 const agentTool = new AgentTool({
+  workspace,
   runtimeDependencies,
   skillRuntime: agentSkill
 });
@@ -74,7 +75,9 @@ const agent = new AgentCli({
 
 `agentTool.definitions` 返回面向模型的 OpenAI-compatible tool schemas。`agentTool.execute(name, args, context)` 执行指定工具，并把持续终端会话保存在当前 `AgentTool` 实例内。注入 `AgentSkill` 对象后，`skill_find` 和 `skill_activate` 会暴露给模型，并委托该对象完成 skill 查找和激活。
 
-产品主路径只需要传 `runtimeDependencies` 和 `skillRuntime`。`workspace` 由 `AgentCli` 在每次工具调用时通过 context 传入；`rgBin`、`nodeBin`、`pythonBin` 应统一放进 `runtimeDependencies`；`host`、`port`、`token` 只属于 HTTP 服务模式；`skillIndexPath` 只用于旧文件索引兼容；web provider 和 shell 安全预算应由产品配置层或默认策略统一管理，不应出现在最小启动示例里。
+产品主路径只需要传 `workspace`、`runtimeDependencies` 和 `skillRuntime`。其中 `runtimeDependencies` 是 Node、Python、rg 等运行时注入的唯一入口；`skillRuntime` 是 skill 查找和激活的唯一入口。对象模式不再接收 `rgBin`、`nodeBin`、`pythonBin`、`skillIndexPath`、web provider、shell 限制或 terminal 限制等散参。
+
+web 工具仍然是可选能力，但 provider 配置不属于 `AgentTool` 构造函数。当前实现只在内部环境变量已经配置时暴露 `web_search` 和 `web_fetch`；没有配置时不会暴露这两个工具。
 
 ## HTTP API
 
@@ -154,7 +157,7 @@ npm run release:local
 runtime artifact 是 `win32-x64` zip：
 
 ```text
-dist/agent-tool-0.1.3-win32-x64.zip
+dist/agent-tool-0.2.0-win32-x64.zip
 dist/build-artifact.json
 dist/descriptor.local.json
 dist/descriptor.oss.placeholder.json

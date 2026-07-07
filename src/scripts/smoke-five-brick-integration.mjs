@@ -36,11 +36,8 @@ try {
   console.log("[smoke-five-brick-integration] expand runtime artifacts");
   const { nodeBin, pythonBin } = await installRuntimeArtifacts(tempRoot);
 
-  const agentSkill = new AgentSkill({
-    workspace,
-    managedRoot
-  });
-  await agentSkill.refresh({ workspace });
+  const agentSkill = new AgentSkill(managedRoot);
+  await agentSkill.refresh();
   assert.equal(agentSkill.definitions.some((skill) => skill.name === "python-reporter"), true);
 
   const agentTool = new AgentTool({
@@ -49,10 +46,7 @@ try {
     runtimeDependencies: [
       { type: "node-runtime", bin: nodeBin },
       { type: "python-runtime", bin: pythonBin }
-    ],
-    processExecEnabled: true,
-    maxTimeoutMs: 30_000,
-    maxOutputBytes: 20_000
+    ]
   });
   assert.equal(agentTool.definitions.some((tool) => tool.function?.name === "skill_find"), true);
   assert.equal(agentTool.definitions.some((tool) => tool.function?.name === "skill_activate"), true);

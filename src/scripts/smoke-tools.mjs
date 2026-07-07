@@ -259,9 +259,6 @@ assert.match(skillActivate.details.loadedSkill.content, /Keep replies short/);
 
 const objectTool = new AgentTool({
   workspace,
-  processExecEnabled: true,
-  maxTimeoutMs: 5_000,
-  maxOutputBytes: 8_000,
   skillRuntime: {
     definitions: [{ name: "brief-writer", description: "Write brief replies." }],
     find: async (filter) => ({ skills: [{ name: "brief-writer", query: filter.query }] }),
@@ -284,10 +281,7 @@ await objectTool.dispose();
 
 const pythonAliasTool = new AgentTool({
   workspace,
-  processExecEnabled: true,
-  pythonBin: process.execPath,
-  maxTimeoutMs: 5_000,
-  maxOutputBytes: 8_000
+  runtimeDependencies: [{ type: "python-runtime", bin: process.execPath }]
 });
 const pythonAlias = await pythonAliasTool.execute("run_shell", {
   mode: "process",
