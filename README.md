@@ -73,7 +73,25 @@ const agent = new AgentCli({
 });
 ```
 
-`agentTool.definitions` 返回面向模型的 OpenAI-compatible tool schemas。`agentTool.execute(name, args, context)` 执行指定工具，并把持续终端会话保存在当前 `AgentTool` 实例内。注入 `AgentSkill` 对象后，`skill_find` 和 `skill_activate` 会暴露给模型，并委托该对象完成 skill 查找和激活。
+`agentTool.definitions` 返回面向模型的 OpenAI-compatible tool schemas。`agentTool.execute(name, args, context)` 执行指定工具，并把持续终端会话保存在当前 `AgentTool` 实例内。注入 `AgentSkill` 对象后，`skill_find` 和 `skill_activate` 会暴露给模型，并委托该对象完成本地 skill 查找、远端候选搜索、安装和激活。
+
+`skill_find` 支持两类动作：
+
+```js
+await agentTool.execute("skill_find", {
+  action: "search",
+  source: "all",
+  query: "github"
+});
+
+await agentTool.execute("skill_find", {
+  action: "install",
+  source: "skillhub",
+  slug: "owner-repo-github"
+});
+```
+
+搜索结果里的 `skills` 是已安装 skill，`candidates` 是远端候选。完整 `SKILL.md` 内容只会在后续 `skill_activate` 中通过 `loadedSkill` payload 返回。
 
 产品主路径只需要传 `workspace`、`runtimeDependencies` 和 `skillRuntime`。其中 `runtimeDependencies` 是 Node、Python、rg 等运行时注入的唯一入口；`skillRuntime` 是 skill 查找和激活的唯一入口。对象模式不再接收 `rgBin`、`nodeBin`、`pythonBin`、`skillIndexPath`、web provider、shell 限制或 terminal 限制等散参。
 
@@ -119,7 +137,7 @@ AGENT_TOOL_RESULT_COMPRESSION
 
 `AGENT_TOOL_PYTHON_BIN` 是可选项。配置后，`run_shell` 和 `exec_command` 会把 `executable: "python"`、`"python3"` 或 `"py"` 解析到注入的私有 Python runtime；diagnostics 会验证该 runtime 能导入声明的通用依赖。
 
-`AGENT_TOOL_SKILL_INDEX` 只用于服务模式兼容。对象模式下应通过 `skillRuntime` 注入 `AgentSkill` 实例来暴露 `skill_find` 和 `skill_activate`。
+`AGENT_TOOL_SKILL_INDEX` 只用于服务模式兼容。对象模式下应通过 `skillRuntime` 注入 `AgentSkill` 实例来暴露 `skill_find` 和 `skill_activate`。服务模式的 index-only 路径只代表“已安装 skills 的轻量查询”，不负责远端 provider 搜索或安装。
 
 web 工具是可选项。配置 `AGENT_TOOL_TAVILY_API_KEY`，或配置 `AGENT_TOOL_WEB_GATEWAY_BASE_URL` 和 `AGENT_TOOL_WEB_GATEWAY_TOKEN` 后，才会暴露 `web_search` 和 `web_fetch`。
 

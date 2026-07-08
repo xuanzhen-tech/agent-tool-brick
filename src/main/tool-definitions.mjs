@@ -196,26 +196,52 @@ export const WORKSPACE_SEARCH_TOOL = {
 
 export const SKILL_FIND_TOOL = {
   name: "skill_find",
-  description: "Find available skills from the injected agent-skill index without loading full SKILL.md content.",
+  description: "Search installed and remote skills, or install a selected remote skill through the injected AgentSkill runtime.",
   schema: {
     type: "function",
     function: {
       name: "skill_find",
-      description: "Find available skills by text query, capability, or required tool.",
+      description: "Search installed skills and remote providers, then install selected skills when needed. It never returns full SKILL.md content.",
       parameters: {
         type: "object",
         properties: {
+          action: {
+            type: "string",
+            enum: ["search", "install"],
+            description: "Use search to find local/remote skills, or install to download a selected candidate."
+          },
           query: {
             type: "string",
-            description: "Optional text query matched against skill name, description, capabilities, and tool requirements."
+            description: "Text query matched against installed skills and remote providers."
+          },
+          source: {
+            type: "string",
+            enum: ["all", "openai-curated", "skills-sh", "skillhub", "clawhub"],
+            description: "Remote source to search or install from. clawhub is accepted as an alias for skillhub."
           },
           capability: {
             type: "string",
-            description: "Optional capability id to match exactly."
+            description: "Optional installed-skill capability id to match exactly."
           },
           requiredTool: {
             type: "string",
-            description: "Optional required or optional tool name to match exactly."
+            description: "Optional installed-skill required or optional tool name to match exactly."
+          },
+          package: {
+            type: "string",
+            description: "skills.sh package identifier to install, for example owner/repo@skill."
+          },
+          slug: {
+            type: "string",
+            description: "SkillHub slug to install."
+          },
+          name: {
+            type: "string",
+            description: "OpenAI curated skill name to install, or destination name for a GitHub skill URL."
+          },
+          url: {
+            type: "string",
+            description: "GitHub skill directory URL to install."
           },
           includeDisabled: {
             type: "boolean",
@@ -230,9 +256,9 @@ export const SKILL_FIND_TOOL = {
       }
     }
   },
-  permissions: ["skill.index.read"],
-  timeoutMs: 5_000,
-  cancelable: false
+  permissions: ["skill.index.read", "network.fetch", "filesystem.write"],
+  timeoutMs: 300_000,
+  cancelable: true
 };
 
 export const SKILL_ACTIVATE_TOOL = {

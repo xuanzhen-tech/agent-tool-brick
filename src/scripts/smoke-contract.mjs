@@ -22,12 +22,12 @@ import {
   validateAgentToolManifest,
   validateAgentToolResult
 } from "../index.mjs";
-import { EXEC_COMMAND_TOOL, RUN_SHELL_TOOL, WRITE_STDIN_TOOL } from "../main/tool-definitions.mjs";
+import { EXEC_COMMAND_TOOL, RUN_SHELL_TOOL, SKILL_FIND_TOOL, WRITE_STDIN_TOOL } from "../main/tool-definitions.mjs";
 import { createToolResult } from "../main/tool-contract.mjs";
 
 assert.equal(brickDefinition.id, "agent-tool");
 assert.equal(brickDefinition.kind, "tool");
-assert.equal(brickDefinition.version, "0.2.0");
+assert.equal(brickDefinition.version, "0.2.1");
 assert.equal(validateBrickDefinition(brickDefinition).ok, true);
 assert.equal(brickDefinition.runtimeDependencies.some((item) => item.type === "node-runtime" && item.required === true), true);
 assert.equal(brickDefinition.runtimeDependencies.some((item) => item.slot === "tool:rg" && item.required === false), true);
@@ -75,6 +75,10 @@ assert.equal(agentTool.definitions.some((tool) => tool.function?.name === "skill
 assert.equal(agentTool.definitions.some((tool) => tool.function?.name === "skill_activate"), true);
 assert.equal((await agentTool.execute("skill_find", JSON.stringify({ query: "demo" }))).details.skills[0].name, "demo");
 await agentTool.dispose();
+
+assert.deepEqual(SKILL_FIND_TOOL.schema.function.parameters.properties.action.enum, ["search", "install"]);
+assert.equal(SKILL_FIND_TOOL.schema.function.parameters.properties.package.type, "string");
+assert.equal(SKILL_FIND_TOOL.timeoutMs, 300_000);
 
 const manifest = createAgentToolManifest({
   baseUrl: "http://127.0.0.1:8791",
