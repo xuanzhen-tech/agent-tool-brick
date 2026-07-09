@@ -322,12 +322,12 @@ export const SKILL_ACTIVATE_TOOL = {
 
 export const WEB_SEARCH_TOOL = {
   name: "web_search",
-  description: "Search current public web information through the configured Tavily or generic web gateway provider.",
+  description: "Search current public web information through the server-side tool gateway.",
   schema: {
     type: "function",
     function: {
       name: "web_search",
-      description: "Search the web through the configured provider.",
+      description: "Search the web through the server-side gateway. Tavily credentials are configured only on the server.",
       parameters: {
         type: "object",
         required: ["query"],
@@ -352,7 +352,7 @@ export const WEB_SEARCH_TOOL = {
 
 export const WEB_FETCH_TOOL = {
   name: "web_fetch",
-  description: "Fetch readable content from an exact public http:// or https:// URL through the configured web provider.",
+  description: "Fetch readable content from an exact public http:// or https:// URL through the server-side tool gateway.",
   schema: {
     type: "function",
     function: {
@@ -372,5 +372,81 @@ export const WEB_FETCH_TOOL = {
   },
   permissions: ["network.web.fetch"],
   timeoutMs: 20_000,
+  cancelable: true
+};
+
+export const EMAIL_SEND_TOOL = {
+  name: "email_send",
+  description: "Send an email through the server-side tool gateway. SMTP credentials are configured only on the server.",
+  schema: {
+    type: "function",
+    function: {
+      name: "email_send",
+      description: "Send an email. Use this after a scheduled task finishes when email push is enabled.",
+      parameters: {
+        type: "object",
+        required: ["to", "subject"],
+        properties: {
+          to: {
+            anyOf: [
+              { type: "string" },
+              { type: "array", items: { type: "string" } }
+            ],
+            description: "Recipient email address or addresses."
+          },
+          cc: {
+            anyOf: [
+              { type: "string" },
+              { type: "array", items: { type: "string" } }
+            ],
+            description: "Optional CC recipient or recipients."
+          },
+          bcc: {
+            anyOf: [
+              { type: "string" },
+              { type: "array", items: { type: "string" } }
+            ],
+            description: "Optional BCC recipient or recipients."
+          },
+          subject: {
+            type: "string",
+            description: "Email subject."
+          },
+          text: {
+            type: "string",
+            description: "Plain text email body. Provide text or html."
+          },
+          html: {
+            type: "string",
+            description: "HTML email body. Provide text or html."
+          },
+          attachments: {
+            type: "array",
+            description: "Optional workspace-local file attachments.",
+            items: {
+              type: "object",
+              required: ["path"],
+              properties: {
+                path: {
+                  type: "string",
+                  description: "Workspace-relative attachment file path."
+                },
+                filename: {
+                  type: "string",
+                  description: "Optional attachment display filename."
+                },
+                contentType: {
+                  type: "string",
+                  description: "Optional attachment MIME type."
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  permissions: ["network.email.send", "workspace.read"],
+  timeoutMs: 30_000,
   cancelable: true
 };

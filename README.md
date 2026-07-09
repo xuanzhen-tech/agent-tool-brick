@@ -15,7 +15,8 @@
 - 持续终端会话工具 `exec_command` 和 `write_stdin`
 - 通过注入的 `rg` runtime 暴露可选 `workspace_search`
 - 通过注入的 `AgentSkill` 对象暴露可选 `skill_find` 和 `skill_activate`
-- 通过 Tavily 或通用 web gateway 暴露可选 `web_search` 和 `web_fetch`
+- 通过服务端 Tool Gateway 暴露 `web_search` 和 `web_fetch`
+- 通过服务端 Tool Gateway 暴露 `email_send`
 - 通过注入的 `python-runtime` 支持 Python-backed 本地工具执行
 
 本积木不负责：
@@ -77,6 +78,8 @@ const agent = new AgentCli({
 
 `agentTool.definitions` 返回面向模型的 OpenAI-compatible tool schemas。`agentTool.execute(name, args, context)` 执行指定工具，并把持续终端会话保存在当前 `AgentTool` 实例内。注入 `AgentSkill` 对象后，`skill_find` 和 `skill_activate` 会暴露给模型，并委托该对象完成本地 skill 查找、远端候选搜索、安装和激活。
 
+`web_search`、`web_fetch` 和 `email_send` 默认通过固定 Server Tool Gateway 转发。Tavily key、SMTP host、SMTP username/password 都只配置在服务器上，产品仓库和 `AgentTool` 构造函数不接收这些密钥。`email_send` 的附件仍由本地 `AgentTool` 读取 workspace 内文件并做大小/路径校验，然后把文件内容随请求交给服务器发送。
+
 `skill_find` 支持两类动作：
 
 ```js
@@ -97,7 +100,7 @@ await agentTool.execute("skill_find", {
 
 产品主路径只需要传 `workspace`、`runtimeDependencies` 和 `skillRuntime`。其中 `runtimeDependencies` 是 Node、Python、rg 等运行时注入的唯一入口；`skillRuntime` 是 skill 查找和激活的唯一入口。对象模式不再接收 `rgBin`、`nodeBin`、`pythonBin`、`skillIndexPath`、web provider、shell 限制或 terminal 限制等散参。
 
-web 工具仍然是可选能力，但 provider 配置不属于 `AgentTool` 构造函数。当前实现只在内部环境变量已经配置时暴露 `web_search` 和 `web_fetch`；没有配置时不会暴露这两个工具。
+产品主路径不需要配置 web provider 或邮件 provider。若要在本地开发中替换服务器地址，可设置 `AGENT_TOOL_GATEWAY_BASE_URL`；未设置时默认使用 `http://47.109.82.99/agent-llm-gateway`。
 
 ## HTTP API
 
@@ -122,9 +125,7 @@ AGENT_TOOL_NODE_BIN
 AGENT_TOOL_PYTHON_BIN
 AGENT_TOOL_RG_BIN
 AGENT_TOOL_SKILL_INDEX
-AGENT_TOOL_TAVILY_API_KEY
-AGENT_TOOL_WEB_GATEWAY_BASE_URL
-AGENT_TOOL_WEB_GATEWAY_TOKEN
+AGENT_TOOL_GATEWAY_BASE_URL
 AGENT_TOOL_WEB_MAX_RESULTS
 AGENT_TOOL_PROCESS_EXEC_ENABLED
 AGENT_TOOL_MAX_TIMEOUT_MS
@@ -141,7 +142,7 @@ AGENT_TOOL_RESULT_COMPRESSION
 
 `AGENT_TOOL_SKILL_INDEX` 只用于服务模式兼容。对象模式下应通过 `skillRuntime` 注入 `AgentSkill` 实例来暴露 `skill_find` 和 `skill_activate`。服务模式的 index-only 路径只代表“已安装 skills 的轻量查询”，不负责远端 provider 搜索或安装。
 
-web 工具是可选项。配置 `AGENT_TOOL_TAVILY_API_KEY`，或配置 `AGENT_TOOL_WEB_GATEWAY_BASE_URL` 和 `AGENT_TOOL_WEB_GATEWAY_TOKEN` 后，才会暴露 `web_search` 和 `web_fetch`。
+`AGENT_TOOL_GATEWAY_BASE_URL` 是可选覆盖项。默认指向固定 Server Tool Gateway；Tavily 和 SMTP 配置必须放在服务器环境变量中，不放在产品仓库或客户端环境变量中。
 
 工具结果压缩默认启用。只有调试原始工具输出时才应设置 `AGENT_TOOL_RESULT_COMPRESSION=off`。
 
@@ -177,7 +178,7 @@ npm run release:local
 runtime artifact 是 `win32-x64` zip：
 
 ```text
-dist/agent-tool-0.2.0-win32-x64.zip
+dist/agent-tool-0.2.2-win32-x64.zip
 dist/build-artifact.json
 dist/descriptor.local.json
 dist/descriptor.oss.placeholder.json

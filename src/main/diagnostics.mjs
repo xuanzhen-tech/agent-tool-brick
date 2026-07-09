@@ -12,6 +12,7 @@ import { promisify } from "node:util";
 import { brickDefinition } from "../brick-definition.mjs";
 import { isRgAvailable } from "./search-runtime.mjs";
 import { isSkillIndexAvailable } from "./skill-runtime.mjs";
+import { isEmailProviderAvailable } from "./email-runtime.mjs";
 import { isWebProviderAvailable } from "./web-runtime.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -40,6 +41,7 @@ export async function createDiagnosticsReport(config, options = {}) {
   checks.push(await createRgRuntimeCheck(config));
   checks.push(await createSkillIndexCheck(config));
   checks.push(createWebProviderCheck(config));
+  checks.push(createEmailProviderCheck(config));
 
   const status = checks.some((check) => check.status === "fail")
     ? "fail"
@@ -137,6 +139,24 @@ function createWebProviderCheck(config) {
     id: "tool.web_provider",
     status: "warn",
     summary: "Web provider is not configured; web_search and web_fetch will not be exposed.",
+    detail: availability.detail
+  };
+}
+
+function createEmailProviderCheck(config) {
+  const availability = isEmailProviderAvailable(config);
+  if (availability.available) {
+    return {
+      id: "tool.email_provider",
+      status: "pass",
+      summary: "email_send is exposed through the server tool gateway.",
+      detail: availability.detail
+    };
+  }
+  return {
+    id: "tool.email_provider",
+    status: "warn",
+    summary: "email_send is not exposed because the server tool gateway is not configured.",
     detail: availability.detail
   };
 }
