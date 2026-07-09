@@ -45,6 +45,6 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "@xuanzhen-tech/agent-release-foundation": "0.0.4"
+    "@xuanzhen-tech/agent-release-foundation": "0.0.6"
   }
 }
