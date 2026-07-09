@@ -29,6 +29,7 @@ export function createTerminalSessionManager(config = {}) {
 
 class TerminalSessionManager {
   constructor(config = {}) {
+    this.config = config;
     this.sessions = new Map();
     this.nextSessionNumber = 1;
     this.maxSessions = positiveInteger(config.terminalMaxSessions, DEFAULT_MAX_SESSIONS);

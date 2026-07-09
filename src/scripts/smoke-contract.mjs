@@ -27,28 +27,44 @@ import { createToolResult } from "../main/tool-contract.mjs";
 
 assert.equal(brickDefinition.id, "agent-tool");
 assert.equal(brickDefinition.kind, "tool");
-assert.equal(brickDefinition.version, "0.2.2");
+assert.equal(brickDefinition.version, "0.2.3");
 assert.equal(validateBrickDefinition(brickDefinition).ok, true);
 assert.equal(brickDefinition.runtimeDependencies.some((item) => item.type === "node-runtime" && item.required === true), true);
 assert.equal(brickDefinition.runtimeDependencies.some((item) => item.slot === "tool:rg" && item.required === false), true);
 assert.equal(brickDefinition.runtimeDependencies.some((item) => item.type === "python-runtime" && item.required === false), true);
+assert.equal(brickDefinition.runtimeDependencies.some((item) => item.type === "node-package" && item.required === false), true);
+assert.equal(brickDefinition.runtimeDependencies.some((item) => item.type === "playwright-browsers" && item.required === false), true);
 assert.equal(brickDefinition.capabilities.some((item) => item.id === "agent-tool.terminal-session"), true);
 assert.equal(brickDefinition.capabilities.some((item) => item.id === "agent-tool.skill-tools"), true);
 assert.equal(brickDefinition.capabilities.some((item) => item.id === "agent-tool.web"), true);
 assert.equal(brickDefinition.capabilities.some((item) => item.id === "agent-tool.email"), true);
 assert.equal(brickDefinition.capabilities.some((item) => item.id === "agent-tool.python-runtime"), true);
+assert.equal(brickDefinition.capabilities.some((item) => item.id === "agent-tool.node-package-runtime"), true);
+assert.equal(brickDefinition.capabilities.some((item) => item.id === "agent-tool.playwright-browsers-env"), true);
 
 const launchConfig = createAgentToolLaunchConfig({
   port: 8791,
   workspace: process.cwd(),
   runtimeDependencies: [
     { type: "tool", slot: "tool:rg", id: "rg", bin: "rg" },
-    { type: "python-runtime", bin: "python" }
+    { type: "python-runtime", bin: "python" },
+    {
+      type: "node-package",
+      id: "playwright",
+      packageName: "playwright",
+      nodeModulesPath: "C:/product/node_modules",
+      nodeImportRegisterPath: "C:/product/src/main/runtime/playwright-esm-register.mjs"
+    },
+    { type: "playwright-browsers", slot: "playwright-browsers", browsersPath: "C:/runtime/ms-playwright" }
   ]
 });
 assert.equal(validateAgentToolLaunchConfig(launchConfig).ok, true);
 assert.equal(launchConfig.env.AGENT_TOOL_WORKSPACE_ROOT, process.cwd());
 assert.equal(launchConfig.env.AGENT_TOOL_PYTHON_BIN, "python");
+assert.equal(launchConfig.env.PLAYWRIGHT_BROWSERS_PATH, "C:/runtime/ms-playwright");
+assert.equal(launchConfig.env.AGENT_TOOL_PLAYWRIGHT_BROWSERS_PATH, "C:/runtime/ms-playwright");
+assert.equal(launchConfig.env.AGENT_TOOL_NODE_PACKAGE_PATHS, "C:/product/node_modules");
+assert.equal(launchConfig.env.AGENT_TOOL_NODE_IMPORT_REGISTERS, "C:/product/src/main/runtime/playwright-esm-register.mjs");
 
 const runtimeContract = createAgentToolRuntimeContract({ platform: "win32-x64" });
 assert.equal(runtimeContract.schemaVersion, "agent-tool.runtime.v1");
@@ -56,10 +72,15 @@ assert.equal(runtimeContract.command, "agent-tool");
 assert.equal(runtimeContract.env.resultCompression, "AGENT_TOOL_RESULT_COMPRESSION");
 assert.equal(runtimeContract.env.terminalSessionTtlMs, "AGENT_TOOL_TERMINAL_SESSION_TTL_MS");
 assert.equal(runtimeContract.env.pythonBin, "AGENT_TOOL_PYTHON_BIN");
+assert.equal(runtimeContract.env.playwrightBrowsersPath, "PLAYWRIGHT_BROWSERS_PATH");
+assert.equal(runtimeContract.env.nodePackagePaths, "AGENT_TOOL_NODE_PACKAGE_PATHS");
+assert.equal(runtimeContract.env.nodeImportRegisterPaths, "AGENT_TOOL_NODE_IMPORT_REGISTERS");
 assert.equal(runtimeContract.env.toolGatewayBaseUrl, "AGENT_TOOL_GATEWAY_BASE_URL");
 assert.equal(runtimeContract.runtimeDependencies.required[0].type, "node-runtime");
 assert.equal(runtimeContract.runtimeDependencies.optional[0].slot, "tool:rg");
 assert.equal(runtimeContract.runtimeDependencies.optional.some((item) => item.type === "python-runtime"), true);
+assert.equal(runtimeContract.runtimeDependencies.optional.some((item) => item.type === "node-package"), true);
+assert.equal(runtimeContract.runtimeDependencies.optional.some((item) => item.type === "playwright-browsers"), true);
 
 const agentTool = new AgentTool({
   workspace: process.cwd(),
@@ -77,6 +98,18 @@ assert.equal(agentTool.definitions.some((tool) => tool.function?.name === "skill
 assert.equal(agentTool.definitions.some((tool) => tool.function?.name === "skill_activate"), true);
 assert.equal((await agentTool.execute("skill_find", JSON.stringify({ query: "demo" }))).details.skills[0].name, "demo");
 await agentTool.dispose();
+
+const playwrightAwareTool = new AgentTool({
+  workspace: process.cwd(),
+  runtimeDependencies: [
+    { type: "node-package", packageName: "playwright", nodeModulesPath: "C:/product/node_modules" },
+    { type: "playwright-browsers", browsersPath: "C:/runtime/ms-playwright" }
+  ]
+});
+const playwrightShellSchema = playwrightAwareTool.definitions.find((tool) => tool.function?.name === "run_shell");
+assert.match(playwrightShellSchema.function.description, /Product-injected Node packages.*playwright/);
+assert.match(playwrightShellSchema.function.description, /PLAYWRIGHT_BROWSERS_PATH/);
+await playwrightAwareTool.dispose();
 
 assert.deepEqual(SKILL_FIND_TOOL.schema.function.parameters.properties.action.enum, ["search", "install"]);
 assert.equal(SKILL_FIND_TOOL.schema.function.parameters.properties.package.type, "string");
