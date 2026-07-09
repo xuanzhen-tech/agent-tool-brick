@@ -8,6 +8,7 @@
 import { brickDefinition } from "../brick-definition.mjs";
 import { createAgentToolManifest } from "./tool-contract.mjs";
 import {
+  EMAIL_SEND_TOOL,
   EXEC_COMMAND_TOOL,
   RUN_SHELL_TOOL,
   SKILL_ACTIVATE_TOOL,
@@ -17,6 +18,7 @@ import {
   WRITE_STDIN_TOOL,
   WORKSPACE_SEARCH_TOOL
 } from "./tool-definitions.mjs";
+import { executeEmailSend, isEmailProviderAvailable } from "./email-runtime.mjs";
 import { executeRunShell } from "./shell-runtime.mjs";
 import { executeWorkspaceSearch, isRgAvailable } from "./search-runtime.mjs";
 import { executeSkillActivate, executeSkillFind, isSkillIndexAvailable } from "./skill-runtime.mjs";
@@ -28,6 +30,7 @@ export async function createToolRegistry(config, options = {}) {
   const rgAvailability = await isRgAvailable(config.rgBin);
   const skillAvailability = await isSkillIndexAvailable(config.skillIndexPath);
   const webAvailability = isWebProviderAvailable(config);
+  const emailAvailability = isEmailProviderAvailable(config);
   const terminalManager = options.terminalManager ?? createTerminalSessionManager(config);
   const tools = [];
   const executors = new Map();
@@ -54,6 +57,11 @@ export async function createToolRegistry(config, options = {}) {
     tools.push(WEB_SEARCH_TOOL, WEB_FETCH_TOOL);
     executors.set(WEB_SEARCH_TOOL.name, executeWebSearch);
     executors.set(WEB_FETCH_TOOL.name, executeWebFetch);
+  }
+
+  if (emailAvailability.available) {
+    tools.push(EMAIL_SEND_TOOL);
+    executors.set(EMAIL_SEND_TOOL.name, executeEmailSend);
   }
 
   return {

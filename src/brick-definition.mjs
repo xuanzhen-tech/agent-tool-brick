@@ -16,7 +16,7 @@ import { fileURLToPath } from "node:url";
 
 const BRICK_ID = "agent-tool";
 const BRICK_NAME = "Agent Tool";
-const BRICK_VERSION = "0.2.1";
+const BRICK_VERSION = "0.2.2";
 const BRICK_KIND = "tool";
 
 const toolServiceCapability = createBrickCapability({
@@ -65,8 +65,17 @@ const webToolsCapability = createBrickCapability({
   id: "agent-tool.web",
   name: "Web Search And Fetch Tools",
   type: "tool",
-  description: "Searches and fetches public web content through configured Tavily or generic web gateway providers.",
-  requires: ["node-runtime", "web-provider"],
+  description: "Searches and fetches public web content through the server-side tool gateway; Tavily credentials stay on the server.",
+  requires: ["node-runtime", "server-tool-gateway"],
+  optional: true
+});
+
+const emailToolsCapability = createBrickCapability({
+  id: "agent-tool.email",
+  name: "Email Send Tool",
+  type: "tool",
+  description: "Sends email through the server-side tool gateway; SMTP credentials stay on the server.",
+  requires: ["node-runtime", "server-tool-gateway"],
   optional: true
 });
 
@@ -124,6 +133,7 @@ export const brickDefinition = createBrickDefinition({
     workspaceSearchCapability,
     skillToolsCapability,
     webToolsCapability,
+    emailToolsCapability,
     pythonRuntimeCapability
   ],
   configSchema: {

@@ -12,6 +12,7 @@ import { createDiagnosticsReport } from "./diagnostics.mjs";
 import { resolveServiceConfig } from "./launch-config.mjs";
 import { createTerminalSessionManager } from "./terminal-runtime.mjs";
 import {
+  EMAIL_SEND_TOOL,
   EXEC_COMMAND_TOOL,
   RUN_SHELL_TOOL,
   SKILL_ACTIVATE_TOOL,
@@ -22,6 +23,7 @@ import {
   WORKSPACE_SEARCH_TOOL
 } from "./tool-definitions.mjs";
 import { createToolRegistry } from "./tool-registry.mjs";
+import { isEmailProviderAvailable } from "./email-runtime.mjs";
 import { isWebProviderAvailable } from "./web-runtime.mjs";
 
 const TOOL_CALL_SCHEMA_VERSION = "agent-cli-tool.call.v1";
@@ -154,6 +156,9 @@ function selectModelToolSchemas({ config, runtimeDependencies, skillRuntime }) {
   }
   if (isWebProviderAvailable(config).available) {
     tools.push(WEB_SEARCH_TOOL, WEB_FETCH_TOOL);
+  }
+  if (isEmailProviderAvailable(config).available) {
+    tools.push(EMAIL_SEND_TOOL);
   }
   // AgentCli 需要的是 OpenAI-compatible tool schema，而不是带权限字段的 manifest item。
   return tools.map((tool) => tool.schema);

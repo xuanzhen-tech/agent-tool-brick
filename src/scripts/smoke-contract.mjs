@@ -22,12 +22,12 @@ import {
   validateAgentToolManifest,
   validateAgentToolResult
 } from "../index.mjs";
-import { EXEC_COMMAND_TOOL, RUN_SHELL_TOOL, SKILL_FIND_TOOL, WRITE_STDIN_TOOL } from "../main/tool-definitions.mjs";
+import { EMAIL_SEND_TOOL, EXEC_COMMAND_TOOL, RUN_SHELL_TOOL, SKILL_FIND_TOOL, WRITE_STDIN_TOOL } from "../main/tool-definitions.mjs";
 import { createToolResult } from "../main/tool-contract.mjs";
 
 assert.equal(brickDefinition.id, "agent-tool");
 assert.equal(brickDefinition.kind, "tool");
-assert.equal(brickDefinition.version, "0.2.1");
+assert.equal(brickDefinition.version, "0.2.2");
 assert.equal(validateBrickDefinition(brickDefinition).ok, true);
 assert.equal(brickDefinition.runtimeDependencies.some((item) => item.type === "node-runtime" && item.required === true), true);
 assert.equal(brickDefinition.runtimeDependencies.some((item) => item.slot === "tool:rg" && item.required === false), true);
@@ -35,6 +35,7 @@ assert.equal(brickDefinition.runtimeDependencies.some((item) => item.type === "p
 assert.equal(brickDefinition.capabilities.some((item) => item.id === "agent-tool.terminal-session"), true);
 assert.equal(brickDefinition.capabilities.some((item) => item.id === "agent-tool.skill-tools"), true);
 assert.equal(brickDefinition.capabilities.some((item) => item.id === "agent-tool.web"), true);
+assert.equal(brickDefinition.capabilities.some((item) => item.id === "agent-tool.email"), true);
 assert.equal(brickDefinition.capabilities.some((item) => item.id === "agent-tool.python-runtime"), true);
 
 const launchConfig = createAgentToolLaunchConfig({
@@ -55,6 +56,7 @@ assert.equal(runtimeContract.command, "agent-tool");
 assert.equal(runtimeContract.env.resultCompression, "AGENT_TOOL_RESULT_COMPRESSION");
 assert.equal(runtimeContract.env.terminalSessionTtlMs, "AGENT_TOOL_TERMINAL_SESSION_TTL_MS");
 assert.equal(runtimeContract.env.pythonBin, "AGENT_TOOL_PYTHON_BIN");
+assert.equal(runtimeContract.env.toolGatewayBaseUrl, "AGENT_TOOL_GATEWAY_BASE_URL");
 assert.equal(runtimeContract.runtimeDependencies.required[0].type, "node-runtime");
 assert.equal(runtimeContract.runtimeDependencies.optional[0].slot, "tool:rg");
 assert.equal(runtimeContract.runtimeDependencies.optional.some((item) => item.type === "python-runtime"), true);
@@ -79,6 +81,8 @@ await agentTool.dispose();
 assert.deepEqual(SKILL_FIND_TOOL.schema.function.parameters.properties.action.enum, ["search", "install"]);
 assert.equal(SKILL_FIND_TOOL.schema.function.parameters.properties.package.type, "string");
 assert.equal(SKILL_FIND_TOOL.timeoutMs, 300_000);
+assert.equal(EMAIL_SEND_TOOL.schema.function.parameters.required.includes("to"), true);
+assert.equal(EMAIL_SEND_TOOL.schema.function.parameters.required.includes("subject"), true);
 
 const manifest = createAgentToolManifest({
   baseUrl: "http://127.0.0.1:8791",

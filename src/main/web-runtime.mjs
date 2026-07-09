@@ -1,28 +1,28 @@
 /**
- * agent-tool 中由 provider 支撑的 web 工具。
+ * agent-tool 中由服务端 Gateway 支撑的 web 工具。
  *
- * 积木暴露稳定的 `web_search` 和 `web_fetch` 模型工具，但通过配置隐藏
- * provider 选择。这保持了 baseline 中 Tavily/gateway 合同，同时避免在
- * runtime artifact 中引入 SDK 依赖。
+ * Tavily key 不进入产品仓库，也不进入 AgentTool 构造函数。这里只把
+ * web_search/web_fetch 请求转发到 server tool gateway。
  */
 
 import { numberField, stringField } from "./env.mjs";
+import { isServerToolGatewayAvailable, postServerToolGatewayJson } from "./server-tool-gateway.mjs";
 
 const DEFAULT_MAX_RESULTS = 5;
 const MAX_RESULTS = 20;
 const FETCH_CONTENT_LIMIT = 12_000;
 
 export function isWebProviderAvailable(config) {
-  const provider = resolveWebProvider(config);
-  if (!provider.available) {
+  const gateway = isServerToolGatewayAvailable(config);
+  if (!gateway.available) {
     return {
       available: false,
-      detail: "AGENT_TOOL_TAVILY_API_KEY, TAVILY_API_KEY, or AGENT_TOOL_WEB_GATEWAY_* is not configured."
+      detail: gateway.detail
     };
   }
   return {
     available: true,
-    detail: provider.kind === "gateway" ? "generic web gateway configured" : "Tavily configured"
+    detail: `${gateway.detail}; server-side Tavily configuration is checked at call time.`
   };
 }
 
@@ -32,16 +32,21 @@ export async function executeWebSearch(call, config, signal) {
     return blockedResult("query_required", "query is required");
   }
   const maxResults = clampMaxResults(numberField(call.arguments?.maxResults) ?? config.webMaxResults);
-  const results = await getWebClient(config).search({ query, maxResults, signal });
-  return {
-    status: "completed",
-    content: JSON.stringify({ query, results }, null, 2),
-    details: {
-      query,
-      maxResults,
-      results
-    }
-  };
+  try {
+    const body = await postServerToolGatewayJson(config, "/api/tools/web/search", { query, maxResults }, signal);
+    const results = Array.isArray(body.results) ? body.results.map(normalizeSearchResult) : [];
+    return {
+      status: "completed",
+      content: JSON.stringify({ query, results }, null, 2),
+      details: {
+        query,
+        maxResults,
+        results
+      }
+    };
+  } catch (error) {
+    return failedResult(readErrorCode(error) ?? "web_search_failed", formatError(error), { query, maxResults });
+  }
 }
 
 export async function executeWebFetch(call, config, signal) {
@@ -51,126 +56,28 @@ export async function executeWebFetch(call, config, signal) {
     return blockedResult("invalid_url", validationError);
   }
 
-  const result = await getWebClient(config).fetch({ url, signal });
-  const rawContent = result.rawContent || "";
-  if (!rawContent) {
-    return blockedResult("empty_content", "No content found.");
-  }
-
-  const content = rawContent.slice(0, FETCH_CONTENT_LIMIT);
-  const truncated = rawContent.length > FETCH_CONTENT_LIMIT;
-  return {
-    status: "completed",
-    content: `# ${result.title || "Untitled"}\n\n${content}`,
-    details: {
-      url,
-      title: result.title || "Untitled",
-      bytes: Buffer.byteLength(rawContent, "utf8"),
-      truncated
+  try {
+    const result = await postServerToolGatewayJson(config, "/api/tools/web/fetch", { url }, signal);
+    const rawContent = result.rawContent || "";
+    if (!rawContent) {
+      return blockedResult("empty_content", "No content found.");
     }
-  };
-}
 
-function getWebClient(config) {
-  const provider = resolveWebProvider(config);
-  if (!provider.available) {
-    throw new Error("web provider is not configured.");
-  }
-  return provider.kind === "gateway"
-    ? createGatewayWebClient(provider)
-    : createTavilyWebClient(provider);
-}
-
-function resolveWebProvider(config) {
-  if (config.webGatewayBaseUrl && config.webGatewayToken) {
+    const content = rawContent.slice(0, FETCH_CONTENT_LIMIT);
+    const truncated = rawContent.length > FETCH_CONTENT_LIMIT;
     return {
-      available: true,
-      kind: "gateway",
-      baseUrl: config.webGatewayBaseUrl.replace(/\/+$/, ""),
-      token: config.webGatewayToken
-    };
-  }
-  if (config.tavilyApiKey) {
-    return {
-      available: true,
-      kind: "tavily",
-      apiKey: config.tavilyApiKey
-    };
-  }
-  return { available: false };
-}
-
-function createGatewayWebClient(provider) {
-  return {
-    async search({ query, maxResults, signal }) {
-      const body = await postJson(`${provider.baseUrl}/web/search`, provider.token, { query, maxResults }, signal);
-      const results = Array.isArray(body.results) ? body.results : [];
-      return results.map(normalizeSearchResult);
-    },
-    async fetch({ url, signal }) {
-      const body = await postJson(`${provider.baseUrl}/web/fetch`, provider.token, { url }, signal);
-      return {
-        title: typeof body.title === "string" ? body.title : "Untitled",
-        rawContent: typeof body.rawContent === "string" ? body.rawContent : typeof body.content === "string" ? body.content : ""
-      };
-    }
-  };
-}
-
-function createTavilyWebClient(provider) {
-  return {
-    async search({ query, maxResults, signal }) {
-      const body = await postJson("https://api.tavily.com/search", undefined, {
-        api_key: provider.apiKey,
-        query,
-        max_results: maxResults
-      }, signal);
-      const results = Array.isArray(body.results) ? body.results : [];
-      return results.map(normalizeSearchResult);
-    },
-    async fetch({ url, signal }) {
-      const body = await postJson("https://api.tavily.com/extract", undefined, {
-        api_key: provider.apiKey,
-        urls: [url]
-      }, signal);
-      const failed = Array.isArray(body.failed_results) ? body.failed_results[0] : undefined;
-      if (failed?.error) {
-        throw new Error(String(failed.error));
+      status: "completed",
+      content: `# ${result.title || "Untitled"}\n\n${content}`,
+      details: {
+        url,
+        title: result.title || "Untitled",
+        bytes: Buffer.byteLength(rawContent, "utf8"),
+        truncated
       }
-      const result = Array.isArray(body.results) ? body.results[0] : undefined;
-      if (!result) {
-        throw new Error("No results found.");
-      }
-      return {
-        title: typeof result.title === "string" ? result.title : "Untitled",
-        rawContent: typeof result.raw_content === "string"
-          ? result.raw_content
-          : typeof result.rawContent === "string"
-            ? result.rawContent
-            : ""
-      };
-    }
-  };
-}
-
-async function postJson(url, token, body, signal) {
-  const headers = {
-    "content-type": "application/json"
-  };
-  if (token) {
-    headers.authorization = `Bearer ${token}`;
+    };
+  } catch (error) {
+    return failedResult(readErrorCode(error) ?? "web_fetch_failed", formatError(error), { url });
   }
-  const response = await fetch(url, {
-    method: "POST",
-    headers,
-    body: JSON.stringify(body),
-    signal
-  });
-  const parsed = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    throw new Error(typeof parsed.error === "string" ? parsed.error : `Web provider request failed: ${response.status}`);
-  }
-  return parsed;
 }
 
 function normalizeSearchResult(value) {
@@ -218,4 +125,29 @@ function blockedResult(code, message) {
       message
     }
   };
+}
+
+function failedResult(code, message, details = {}) {
+  return {
+    status: "failed",
+    content: message,
+    details: {
+      ...details,
+      failed: true,
+      reasonCode: code,
+      reason: message
+    },
+    error: {
+      code,
+      message
+    }
+  };
+}
+
+function readErrorCode(error) {
+  return typeof error?.code === "string" ? error.code : undefined;
+}
+
+function formatError(error) {
+  return error instanceof Error ? error.message : String(error);
 }
