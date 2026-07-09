@@ -18,6 +18,8 @@
 - 通过服务端 Tool Gateway 暴露 `web_search` 和 `web_fetch`
 - 通过服务端 Tool Gateway 暴露 `email_send`
 - 通过注入的 `python-runtime` 支持 Python-backed 本地工具执行
+- 透传产品注入的 Node 包环境，让 `run_shell` / `exec_command` 可以使用产品组装的能力
+- 通过注入的 `playwright-browsers` 为子进程设置 Playwright Chromium 缓存路径
 
 本积木不负责：
 
@@ -27,6 +29,8 @@
 - 对外 SSE 格式
 - 桌面 UI、安装器、更新器或 release manifest 组合
 - 打包 Node、Python、浏览器或 rg 二进制
+- 管理 Playwright 浏览器 artifact 的下载、解压或版本选择
+- 携带或发布 Playwright JS library；该依赖由产品仓库组装
 
 ## Host 入口
 
@@ -98,7 +102,9 @@ await agentTool.execute("skill_find", {
 
 搜索结果里的 `skills` 是已安装 skill，`candidates` 是远端候选。完整 `SKILL.md` 内容只会在后续 `skill_activate` 中通过 `loadedSkill` payload 返回。
 
-产品主路径只需要传 `workspace`、`runtimeDependencies` 和 `skillRuntime`。其中 `runtimeDependencies` 是 Node、Python、rg 等运行时注入的唯一入口；`skillRuntime` 是 skill 查找和激活的唯一入口。对象模式不再接收 `rgBin`、`nodeBin`、`pythonBin`、`skillIndexPath`、web provider、shell 限制或 terminal 限制等散参。
+产品主路径只需要传 `workspace`、`runtimeDependencies` 和 `skillRuntime`。其中 `runtimeDependencies` 是 Node、Python、rg、产品 Node 包、Playwright browsers 等运行时注入的唯一入口；`skillRuntime` 是 skill 查找和激活的唯一入口。对象模式不再接收 `rgBin`、`nodeBin`、`pythonBin`、`skillIndexPath`、web provider、shell 限制或 terminal 限制等散参。
+
+当产品希望 agent 在 shell 脚本里使用 Playwright 时，产品仓库应把 `playwright` npm 依赖加入产品包，并通过 `runtimeDependencies` 注入一个 `node-package` 项。`agent-tool` 只把该项转换为 `NODE_PATH` / `NODE_OPTIONS` 等子进程环境，不直接依赖 Playwright。`playwright-browsers` 仍只负责提供 Chromium 缓存，并通过 `PLAYWRIGHT_BROWSERS_PATH` 暴露给子进程。
 
 产品主路径不需要配置 web provider 或邮件 provider。若要在本地开发中替换服务器地址，可设置 `AGENT_TOOL_GATEWAY_BASE_URL`；未设置时默认使用 `http://47.109.82.99/agent-llm-gateway`。
 
@@ -124,6 +130,11 @@ AGENT_TOOL_WORKSPACE_ROOT
 AGENT_TOOL_NODE_BIN
 AGENT_TOOL_PYTHON_BIN
 AGENT_TOOL_RG_BIN
+PLAYWRIGHT_BROWSERS_PATH
+AGENT_TOOL_PLAYWRIGHT_BROWSERS_PATH
+AGENT_TOOL_NODE_PACKAGE_PATHS
+AGENT_TOOL_NODE_IMPORT_REGISTERS
+AGENT_TOOL_NODE_OPTIONS
 AGENT_TOOL_SKILL_INDEX
 AGENT_TOOL_GATEWAY_BASE_URL
 AGENT_TOOL_WEB_MAX_RESULTS
@@ -139,6 +150,10 @@ AGENT_TOOL_RESULT_COMPRESSION
 `AGENT_TOOL_RG_BIN` 是可选项。缺少 rg 时，`workspace_search` 不暴露，diagnostics 给出 warn。
 
 `AGENT_TOOL_PYTHON_BIN` 是可选项。配置后，`run_shell` 和 `exec_command` 会把 `executable: "python"`、`"python3"` 或 `"py"` 解析到注入的私有 Python runtime；diagnostics 会验证该 runtime 能导入声明的通用依赖。
+
+`AGENT_TOOL_NODE_PACKAGE_PATHS` / `AGENT_TOOL_NODE_IMPORT_REGISTERS` / `AGENT_TOOL_NODE_OPTIONS` 来自产品注入的 `node-package` runtime dependency。它们用于让 `run_shell` 和 `exec_command` 的 Node 子进程解析产品包内的 JS 依赖，例如产品侧安装的 `playwright`。
+
+`PLAYWRIGHT_BROWSERS_PATH` 来自可选的 `playwright-browsers` runtime dependency。配置后，Node 子进程可以使用该路径下的 Chromium 缓存；Playwright JS library 本身仍由产品仓库依赖提供。
 
 `AGENT_TOOL_SKILL_INDEX` 只用于服务模式兼容。对象模式下应通过 `skillRuntime` 注入 `AgentSkill` 实例来暴露 `skill_find` 和 `skill_activate`。服务模式的 index-only 路径只代表“已安装 skills 的轻量查询”，不负责远端 provider 搜索或安装。
 
@@ -178,7 +193,7 @@ npm run release:local
 runtime artifact 是 `win32-x64` zip：
 
 ```text
-dist/agent-tool-0.2.2-win32-x64.zip
+dist/agent-tool-0.2.3-win32-x64.zip
 dist/build-artifact.json
 dist/descriptor.local.json
 dist/descriptor.oss.placeholder.json
@@ -192,4 +207,4 @@ slot: tool:agent-tool
 install.command: agent-tool serve
 ```
 
-artifact 刻意不包含 Node、Python、Playwright browsers、rg 二进制、`.env`、UI 代码和 host 专属配置。
+artifact 刻意不包含 Node、Python、Playwright browsers、rg 二进制、`.env`、UI 代码、host 专属配置或 Playwright JS library。Playwright JS library 由产品仓库依赖提供；浏览器缓存仍由 `playwright-package` 提供。

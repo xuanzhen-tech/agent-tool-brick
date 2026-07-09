@@ -292,6 +292,99 @@ assert.equal(pythonAlias.status, "completed");
 assert.match(pythonAlias.details.stdout, /python-alias-ok/);
 await pythonAliasTool.dispose();
 
+const playwrightBrowsersPath = path.join(workspace, "ms-playwright");
+await fs.mkdir(path.join(playwrightBrowsersPath, "chromium-smoke"), { recursive: true });
+const productNodeModulesPath = path.join(workspace, "product-node-modules");
+const productPlaywrightPackageRoot = path.join(productNodeModulesPath, "playwright");
+await fs.mkdir(productPlaywrightPackageRoot, { recursive: true });
+await fs.writeFile(path.join(productPlaywrightPackageRoot, "package.json"), JSON.stringify({
+  name: "playwright",
+  version: "0.0.0-smoke",
+  type: "module",
+  main: "./index.cjs",
+  exports: {
+    ".": {
+      import: "./index.mjs",
+      require: "./index.cjs"
+    }
+  }
+}, null, 2), "utf8");
+await fs.writeFile(path.join(productPlaywrightPackageRoot, "index.cjs"), "exports.chromium = { source: 'product-cjs' };\n", "utf8");
+await fs.writeFile(path.join(productPlaywrightPackageRoot, "index.mjs"), "export const chromium = { source: 'product-esm' };\nexport default { chromium };\n", "utf8");
+const productRuntimeDir = path.join(workspace, "product-runtime");
+await fs.mkdir(productRuntimeDir, { recursive: true });
+await fs.writeFile(path.join(productRuntimeDir, "playwright-esm-loader.mjs"), [
+  "import { pathToFileURL } from 'node:url';",
+  "",
+  "export async function resolve(specifier, context, nextResolve) {",
+  "  if (specifier === 'playwright') {",
+  "    return {",
+  "      url: pathToFileURL(process.env.SMOKE_PLAYWRIGHT_ESM_ENTRY).href,",
+  "      shortCircuit: true",
+  "    };",
+  "  }",
+  "  return nextResolve(specifier, context);",
+  "}"
+].join("\n"), "utf8");
+const productRegisterPath = path.join(productRuntimeDir, "playwright-esm-register.mjs");
+await fs.writeFile(productRegisterPath, "import { register } from 'node:module';\nregister('./playwright-esm-loader.mjs', import.meta.url);\n", "utf8");
+const playwrightTool = new AgentTool({
+  workspace,
+  runtimeDependencies: [
+    {
+      type: "node-package",
+      id: "playwright",
+      packageName: "playwright",
+      nodeModulesPath: productNodeModulesPath,
+      nodeImportRegisterPath: productRegisterPath,
+      env: {
+        SMOKE_PLAYWRIGHT_ESM_ENTRY: path.join(productPlaywrightPackageRoot, "index.mjs")
+      }
+    },
+    { type: "playwright-browsers", browsersPath: playwrightBrowsersPath }
+  ]
+});
+const playwrightRequire = await playwrightTool.execute("run_shell", {
+  mode: "process",
+  executable: process.execPath,
+  args: [
+    "-e",
+    "const { chromium } = require('playwright'); console.log('require:' + chromium.source); console.log('browsers:' + process.env.PLAYWRIGHT_BROWSERS_PATH);"
+  ]
+}, { workspace });
+assert.equal(playwrightRequire.status, "completed");
+assert.match(playwrightRequire.details.stdout, /require:product-cjs/);
+assert.match(playwrightRequire.details.stdout, new RegExp(escapeRegExp(playwrightBrowsersPath)));
+
+const playwrightImport = await playwrightTool.execute("run_shell", {
+  mode: "process",
+  executable: process.execPath,
+  args: [
+    "--input-type=module",
+    "-e",
+    "import { chromium } from 'playwright'; console.log('import:' + chromium.source); console.log('browsers:' + process.env.PLAYWRIGHT_BROWSERS_PATH);"
+  ]
+}, { workspace });
+assert.equal(playwrightImport.status, "completed");
+assert.match(playwrightImport.details.stdout, /import:product-esm/);
+assert.match(playwrightImport.details.stdout, new RegExp(escapeRegExp(playwrightBrowsersPath)));
+
+const playwrightTerminal = await playwrightTool.execute("exec_command", {
+  mode: "process",
+  executable: process.execPath,
+  args: [
+    "--input-type=module",
+    "-e",
+    "import { chromium } from 'playwright'; console.log('terminal-import:' + chromium.source);"
+  ],
+  yield_time_ms: 1_000,
+  timeoutMs: 3_000
+}, { workspace });
+assert.equal(playwrightTerminal.status, "completed");
+assert.equal(playwrightTerminal.details.running, false);
+assert.match(playwrightTerminal.details.stdout, /terminal-import:product-esm/);
+await playwrightTool.dispose();
+
 console.log("[smoke-tools] ok");
 
 function wait(ms) {

@@ -120,6 +120,7 @@ async function validateRuntimeArtifactIfPresent() {
     "src/cli.mjs",
     "src/main/server.mjs",
     "src/main/shell-runtime.mjs",
+    "src/main/runtime-dependency-config.mjs",
     "src/main/search-runtime.mjs",
     "src/main/skill-runtime.mjs",
     "src/main/terminal-runtime.mjs",
@@ -166,6 +167,12 @@ async function validateRuntimeArtifactIfPresent() {
   }
   if (!runtimeContract.runtimeDependencies?.optional?.some((dependency) => dependency.type === "python-runtime")) {
     throw new Error("runtime-contract.json must declare python-runtime as optional");
+  }
+  if (!runtimeContract.runtimeDependencies?.optional?.some((dependency) => dependency.type === "node-package")) {
+    throw new Error("runtime-contract.json must declare node-package as optional");
+  }
+  if (!runtimeContract.runtimeDependencies?.optional?.some((dependency) => dependency.type === "playwright-browsers")) {
+    throw new Error("runtime-contract.json must declare playwright-browsers as optional");
   }
 
   await assertRuntimeFilesDoNotContainSecrets(runtimeFiles);

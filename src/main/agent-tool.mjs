@@ -11,6 +11,7 @@ import { brickDefinition } from "../brick-definition.mjs";
 import { createDiagnosticsReport } from "./diagnostics.mjs";
 import { resolveServiceConfig } from "./launch-config.mjs";
 import { createTerminalSessionManager } from "./terminal-runtime.mjs";
+import { createRuntimeDependencyConfig } from "./runtime-dependency-config.mjs";
 import {
   EMAIL_SEND_TOOL,
   EXEC_COMMAND_TOOL,
@@ -34,11 +35,13 @@ export class AgentTool {
     this.workspace = normalizedInput.workspace;
     this.runtimeDependencies = normalizeRuntimeDependencies(normalizedInput.runtimeDependencies);
     this.skillRuntime = normalizedInput.skillRuntime;
+    const runtimeConfig = createRuntimeDependencyConfig(this.runtimeDependencies);
     this.config = resolveServiceConfig(process.env, {
       workspaceRoot: normalizedInput.workspace,
       rgBin: resolveInjectedBin(this.runtimeDependencies, ["tool:rg", "rg"]),
       nodeBin: resolveInjectedBin(this.runtimeDependencies, ["node-runtime", "node"]),
-      pythonBin: resolveInjectedBin(this.runtimeDependencies, ["python-runtime", "python"])
+      pythonBin: resolveInjectedBin(this.runtimeDependencies, ["python-runtime", "python"]),
+      ...runtimeConfig
     });
     this.terminalManager = createTerminalSessionManager(this.config);
     this.registryPromise = undefined;
@@ -161,7 +164,29 @@ function selectModelToolSchemas({ config, runtimeDependencies, skillRuntime }) {
     tools.push(EMAIL_SEND_TOOL);
   }
   // AgentCli 需要的是 OpenAI-compatible tool schema，而不是带权限字段的 manifest item。
-  return tools.map((tool) => tool.schema);
+  return tools.map((tool) => decorateToolSchemaForRuntime(tool.schema, config));
+}
+
+function decorateToolSchemaForRuntime(schema, config = {}) {
+  const name = schema?.function?.name;
+  if (!["run_shell", "exec_command"].includes(name)) return schema;
+  const packageNames = Array.isArray(config.nodePackageNames) ? config.nodePackageNames : [];
+  const hasPlaywrightPackage = packageNames.some((packageName) => packageName.toLowerCase() === "playwright");
+  if (!packageNames.length && !config.playwrightBrowsersPath) return schema;
+
+  const clone = JSON.parse(JSON.stringify(schema));
+  const hints = [];
+  if (packageNames.length > 0) {
+    hints.push(`Product-injected Node packages are available to Node commands: ${packageNames.join(", ")}.`);
+  }
+  if (hasPlaywrightPackage && config.playwrightBrowsersPath) {
+    hints.push("Playwright Chromium cache is configured through PLAYWRIGHT_BROWSERS_PATH.");
+  } else if (config.playwrightBrowsersPath) {
+    hints.push("A Playwright browser cache path is configured through PLAYWRIGHT_BROWSERS_PATH.");
+  }
+  const hint = hints.join(" ");
+  clone.function.description = `${clone.function.description} ${hint}`;
+  return clone;
 }
 
 function parseToolArguments(args) {

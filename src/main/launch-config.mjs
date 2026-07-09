@@ -7,6 +7,8 @@
 
 import { brickDefinition } from "../brick-definition.mjs";
 import { firstNonEmpty, parseBoolean, parsePositiveInteger } from "./env.mjs";
+import { createRuntimeDependencyConfig } from "./runtime-dependency-config.mjs";
+import path from "node:path";
 
 const DEFAULT_HOST = "127.0.0.1";
 const DEFAULT_PORT = 8791;
@@ -21,6 +23,7 @@ export function createAgentToolLaunchConfig(input = {}) {
   const host = input.host ?? DEFAULT_HOST;
   const port = normalizePort(input.port ?? DEFAULT_PORT);
   const runtimeDependencies = normalizeRuntimeDependencies(input.runtimeDependencies);
+  const runtimeConfig = createRuntimeDependencyConfig(runtimeDependencies);
   const env = {};
 
   setEnv(env, "AGENT_TOOL_HOST", host);
@@ -29,6 +32,12 @@ export function createAgentToolLaunchConfig(input = {}) {
   setEnv(env, "AGENT_TOOL_NODE_BIN", input.nodeBin ?? resolveInjectedBin(runtimeDependencies, ["node-runtime", "node"]));
   setEnv(env, "AGENT_TOOL_PYTHON_BIN", input.pythonBin ?? resolveInjectedBin(runtimeDependencies, ["python-runtime", "python"]));
   setEnv(env, "AGENT_TOOL_RG_BIN", input.rgBin ?? resolveInjectedBin(runtimeDependencies, ["tool:rg", "rg"]));
+  setEnvEntries(env, runtimeConfig.runtimeEnv);
+  setEnv(env, "PLAYWRIGHT_BROWSERS_PATH", input.playwrightBrowsersPath ?? runtimeConfig.playwrightBrowsersPath);
+  setEnv(env, "AGENT_TOOL_PLAYWRIGHT_BROWSERS_PATH", input.playwrightBrowsersPath ?? runtimeConfig.playwrightBrowsersPath);
+  setEnv(env, "AGENT_TOOL_NODE_PACKAGE_PATHS", joinList(input.nodePackagePaths ?? runtimeConfig.nodePackagePaths, path.delimiter));
+  setEnv(env, "AGENT_TOOL_NODE_IMPORT_REGISTERS", joinList(input.nodeImportRegisterPaths ?? runtimeConfig.nodeImportRegisterPaths, path.delimiter));
+  setEnv(env, "AGENT_TOOL_NODE_OPTIONS", joinList(input.nodeOptions ?? runtimeConfig.nodeOptions, " "));
   setEnv(env, "AGENT_TOOL_TOKEN", input.token);
   setEnv(env, "AGENT_TOOL_SKILL_INDEX", input.skillIndexPath);
   setEnv(env, "AGENT_TOOL_GATEWAY_BASE_URL", input.toolGatewayBaseUrl);
@@ -105,6 +114,10 @@ export function createAgentToolRuntimeContract(input = {}) {
       nodeBin: "AGENT_TOOL_NODE_BIN",
       pythonBin: "AGENT_TOOL_PYTHON_BIN",
       rgBin: "AGENT_TOOL_RG_BIN",
+      playwrightBrowsersPath: "PLAYWRIGHT_BROWSERS_PATH",
+      nodePackagePaths: "AGENT_TOOL_NODE_PACKAGE_PATHS",
+      nodeImportRegisterPaths: "AGENT_TOOL_NODE_IMPORT_REGISTERS",
+      nodeOptions: "AGENT_TOOL_NODE_OPTIONS",
       skillIndex: "AGENT_TOOL_SKILL_INDEX",
       toolGatewayBaseUrl: "AGENT_TOOL_GATEWAY_BASE_URL",
       webMaxResults: "AGENT_TOOL_WEB_MAX_RESULTS",
@@ -134,6 +147,15 @@ export function createAgentToolRuntimeContract(input = {}) {
         {
           type: "python-runtime",
           injectedEnv: "AGENT_TOOL_PYTHON_BIN"
+        },
+        {
+          type: "node-package",
+          injectedEnv: "NODE_PATH"
+        },
+        {
+          type: "playwright-browsers",
+          slot: "playwright-browsers",
+          injectedEnv: "PLAYWRIGHT_BROWSERS_PATH"
         }
       ]
     }
@@ -152,6 +174,12 @@ export function resolveServiceConfig(env = process.env, overrides = {}) {
     nodeBin: firstNonEmpty(overrides.nodeBin, env.AGENT_TOOL_NODE_BIN),
     pythonBin: firstNonEmpty(overrides.pythonBin, env.AGENT_TOOL_PYTHON_BIN, env.AGENT_CLI_PYTHON_BIN),
     rgBin: firstNonEmpty(overrides.rgBin, env.AGENT_TOOL_RG_BIN),
+    playwrightBrowsersPath: firstNonEmpty(overrides.playwrightBrowsersPath, env.PLAYWRIGHT_BROWSERS_PATH, env.AGENT_TOOL_PLAYWRIGHT_BROWSERS_PATH),
+    runtimeEnv: normalizeRuntimeEnv(overrides.runtimeEnv),
+    nodePackagePaths: normalizeDelimitedList(overrides.nodePackagePaths ?? env.AGENT_TOOL_NODE_PACKAGE_PATHS, path.delimiter),
+    nodeImportRegisterPaths: normalizeDelimitedList(overrides.nodeImportRegisterPaths ?? env.AGENT_TOOL_NODE_IMPORT_REGISTERS, path.delimiter),
+    nodeOptions: normalizeDelimitedList(overrides.nodeOptions ?? env.AGENT_TOOL_NODE_OPTIONS, " "),
+    nodePackageNames: normalizeDelimitedList(overrides.nodePackageNames, ","),
     skillIndexPath: firstNonEmpty(overrides.skillIndexPath, env.AGENT_TOOL_SKILL_INDEX),
     toolGatewayBaseUrl: firstNonEmpty(
       overrides.toolGatewayBaseUrl,
@@ -183,6 +211,35 @@ function setEnv(env, key, value) {
   if (value !== undefined && value !== null && String(value).trim()) {
     env[key] = String(value);
   }
+}
+
+function setEnvEntries(env, entries) {
+  if (!entries || typeof entries !== "object" || Array.isArray(entries)) return;
+  for (const [key, value] of Object.entries(entries)) {
+    setEnv(env, key, value);
+  }
+}
+
+function joinList(value, delimiter) {
+  const values = normalizeDelimitedList(value, delimiter);
+  return values.length > 0 ? values.join(delimiter) : undefined;
+}
+
+function normalizeRuntimeEnv(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([key, envValue]) => String(key).trim() && envValue !== undefined && envValue !== null)
+      .map(([key, envValue]) => [key, String(envValue)])
+  );
+}
+
+function normalizeDelimitedList(value, delimiter) {
+  if (Array.isArray(value)) return value.filter((item) => typeof item === "string" && item.trim().length > 0);
+  if (typeof value === "string" && value.trim().length > 0) {
+    return value.split(delimiter).map((item) => item.trim()).filter(Boolean);
+  }
+  return [];
 }
 
 function normalizeRuntimeDependencies(value) {

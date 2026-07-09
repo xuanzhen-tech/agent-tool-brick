@@ -16,7 +16,7 @@ import { fileURLToPath } from "node:url";
 
 const BRICK_ID = "agent-tool";
 const BRICK_NAME = "Agent Tool";
-const BRICK_VERSION = "0.2.2";
+const BRICK_VERSION = "0.2.3";
 const BRICK_KIND = "tool";
 
 const toolServiceCapability = createBrickCapability({
@@ -88,6 +88,24 @@ const pythonRuntimeCapability = createBrickCapability({
   optional: true
 });
 
+const nodePackageRuntimeCapability = createBrickCapability({
+  id: "agent-tool.node-package-runtime",
+  name: "Node Package Runtime Binding",
+  type: "runtime",
+  description: "Passes product-injected Node package paths and import hooks to shell and terminal Node commands.",
+  requires: ["node-runtime"],
+  optional: true
+});
+
+const playwrightBrowsersCapability = createBrickCapability({
+  id: "agent-tool.playwright-browsers-env",
+  name: "Playwright Browser Cache Environment",
+  type: "runtime",
+  description: "Passes an injected Playwright browser cache path to shell and terminal processes; the product owns the Playwright JS package.",
+  requires: ["node-runtime", "playwright-browsers"],
+  optional: true
+});
+
 export const brickDefinition = createBrickDefinition({
   id: BRICK_ID,
   name: BRICK_NAME,
@@ -134,7 +152,9 @@ export const brickDefinition = createBrickDefinition({
     skillToolsCapability,
     webToolsCapability,
     emailToolsCapability,
-    pythonRuntimeCapability
+    pythonRuntimeCapability,
+    nodePackageRuntimeCapability,
+    playwrightBrowsersCapability
   ],
   configSchema: {
     type: "object",
@@ -160,6 +180,17 @@ export const brickDefinition = createBrickDefinition({
       type: "python-runtime",
       required: false,
       injectedEnv: "AGENT_TOOL_PYTHON_BIN"
+    },
+    {
+      type: "node-package",
+      required: false,
+      injectedEnv: "NODE_PATH"
+    },
+    {
+      type: "playwright-browsers",
+      slot: "playwright-browsers",
+      required: false,
+      injectedEnv: "PLAYWRIGHT_BROWSERS_PATH"
     }
   ]
 });
