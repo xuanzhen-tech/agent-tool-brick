@@ -89,6 +89,14 @@ assert.equal(manifest.tools[0].name, "run_shell");
 assert.equal(manifest.tools.some((tool) => tool.name === "exec_command"), true);
 assert.equal(manifest.tools.some((tool) => tool.name === "write_stdin"), true);
 
+const expectedShellExecutable = process.platform === "win32" ? "powershell.exe" : "/bin/bash";
+assert.equal(RUN_SHELL_TOOL.schema.function.description.includes("Current OS:"), true);
+assert.equal(RUN_SHELL_TOOL.schema.function.description.includes(expectedShellExecutable), true);
+assert.equal(RUN_SHELL_TOOL.schema.function.parameters.properties.mode.description.includes(expectedShellExecutable), true);
+assert.equal(EXEC_COMMAND_TOOL.schema.function.description.includes("Current OS:"), true);
+assert.equal(EXEC_COMMAND_TOOL.schema.function.description.includes(expectedShellExecutable), true);
+assert.equal(EXEC_COMMAND_TOOL.schema.function.parameters.properties.cmd.description.includes(expectedShellExecutable), true);
+
 assert.equal(validateAgentToolCall({
   schemaVersion: "agent-cli-tool.call.v1",
   toolCallId: "call-1",
