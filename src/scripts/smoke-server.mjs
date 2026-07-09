@@ -76,6 +76,7 @@ try {
   assert.equal(manifest.tools.some((tool) => tool.name === "write_stdin"), true);
   assert.equal(manifest.tools.some((tool) => tool.name === "skill_find"), true);
   assert.equal(manifest.tools.some((tool) => tool.name === "web_search"), true);
+  assert.equal(manifest.tools.some((tool) => tool.name === "email_send"), true);
 
   const result = await postJson(`${url}/api/tools/call`, {
     schemaVersion: "agent-cli-tool.call.v1",
@@ -181,6 +182,20 @@ try {
   });
   assert.equal(webFetch.status, "completed");
   assert.match(webFetch.content, /Readable body/);
+
+  const email = await postJson(`${url}/api/tools/call`, {
+    schemaVersion: "agent-cli-tool.call.v1",
+    toolCallId: "server-email-send",
+    toolName: "email_send",
+    arguments: {
+      to: "ops@example.com",
+      subject: "Smoke report",
+      text: "server smoke email"
+    },
+    workspace: { root: workspace }
+  });
+  assert.equal(email.status, "completed");
+  assert.equal(email.details.messageId, "mock-message-id");
 } finally {
   await runtime.close();
   await webGateway.close();
@@ -225,16 +240,28 @@ async function cancelUntilActive(url, body) {
 async function createMockWebGateway() {
   const server = http.createServer(async (request, response) => {
     const url = new URL(request.url || "/", "http://127.0.0.1");
-    if (request.method === "POST" && url.pathname === "/web/search") {
+    if (request.method === "POST" && url.pathname === "/api/tools/web/search") {
       responseJson(response, {
+        ok: true,
         results: [{ title: "Example Result", url: "https://example.com/article", snippet: "A smoke result." }]
       });
       return;
     }
-    if (request.method === "POST" && url.pathname === "/web/fetch") {
+    if (request.method === "POST" && url.pathname === "/api/tools/web/fetch") {
       responseJson(response, {
+        ok: true,
         title: "Example Article",
         rawContent: "Readable body from the mock gateway."
+      });
+      return;
+    }
+    if (request.method === "POST" && url.pathname === "/api/tools/email/send") {
+      responseJson(response, {
+        ok: true,
+        messageId: "mock-message-id",
+        accepted: ["ops@example.com"],
+        rejected: [],
+        attachmentCount: 0
       });
       return;
     }

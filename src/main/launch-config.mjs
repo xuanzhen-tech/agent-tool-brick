@@ -15,6 +15,7 @@ const DEFAULT_MAX_OUTPUT_BYTES = 64 * 1024;
 const DEFAULT_TERMINAL_SESSION_TTL_MS = 5 * 60_000;
 const DEFAULT_TERMINAL_MAX_SESSIONS = 16;
 const DEFAULT_TERMINAL_MAX_OUTPUT_BYTES = 256 * 1024;
+const DEFAULT_TOOL_GATEWAY_BASE_URL = "http://47.109.82.99/agent-llm-gateway";
 
 export function createAgentToolLaunchConfig(input = {}) {
   const host = input.host ?? DEFAULT_HOST;
@@ -30,9 +31,7 @@ export function createAgentToolLaunchConfig(input = {}) {
   setEnv(env, "AGENT_TOOL_RG_BIN", input.rgBin ?? resolveInjectedBin(runtimeDependencies, ["tool:rg", "rg"]));
   setEnv(env, "AGENT_TOOL_TOKEN", input.token);
   setEnv(env, "AGENT_TOOL_SKILL_INDEX", input.skillIndexPath);
-  setEnv(env, "AGENT_TOOL_TAVILY_API_KEY", input.tavilyApiKey);
-  setEnv(env, "AGENT_TOOL_WEB_GATEWAY_BASE_URL", input.webGatewayBaseUrl);
-  setEnv(env, "AGENT_TOOL_WEB_GATEWAY_TOKEN", input.webGatewayToken);
+  setEnv(env, "AGENT_TOOL_GATEWAY_BASE_URL", input.toolGatewayBaseUrl);
 
   if (input.processExecEnabled !== undefined) {
     setEnv(env, "AGENT_TOOL_PROCESS_EXEC_ENABLED", input.processExecEnabled ? "true" : "false");
@@ -107,9 +106,7 @@ export function createAgentToolRuntimeContract(input = {}) {
       pythonBin: "AGENT_TOOL_PYTHON_BIN",
       rgBin: "AGENT_TOOL_RG_BIN",
       skillIndex: "AGENT_TOOL_SKILL_INDEX",
-      tavilyApiKey: "AGENT_TOOL_TAVILY_API_KEY",
-      webGatewayBaseUrl: "AGENT_TOOL_WEB_GATEWAY_BASE_URL",
-      webGatewayToken: "AGENT_TOOL_WEB_GATEWAY_TOKEN",
+      toolGatewayBaseUrl: "AGENT_TOOL_GATEWAY_BASE_URL",
       webMaxResults: "AGENT_TOOL_WEB_MAX_RESULTS",
       processExecEnabled: "AGENT_TOOL_PROCESS_EXEC_ENABLED",
       maxTimeoutMs: "AGENT_TOOL_MAX_TIMEOUT_MS",
@@ -156,9 +153,13 @@ export function resolveServiceConfig(env = process.env, overrides = {}) {
     pythonBin: firstNonEmpty(overrides.pythonBin, env.AGENT_TOOL_PYTHON_BIN, env.AGENT_CLI_PYTHON_BIN),
     rgBin: firstNonEmpty(overrides.rgBin, env.AGENT_TOOL_RG_BIN),
     skillIndexPath: firstNonEmpty(overrides.skillIndexPath, env.AGENT_TOOL_SKILL_INDEX),
-    tavilyApiKey: firstNonEmpty(overrides.tavilyApiKey, env.AGENT_TOOL_TAVILY_API_KEY, env.TAVILY_API_KEY),
-    webGatewayBaseUrl: firstNonEmpty(overrides.webGatewayBaseUrl, env.AGENT_TOOL_WEB_GATEWAY_BASE_URL),
-    webGatewayToken: firstNonEmpty(overrides.webGatewayToken, env.AGENT_TOOL_WEB_GATEWAY_TOKEN),
+    toolGatewayBaseUrl: firstNonEmpty(
+      overrides.toolGatewayBaseUrl,
+      overrides.webGatewayBaseUrl,
+      env.AGENT_TOOL_GATEWAY_BASE_URL,
+      env.AGENT_CLI_LLM_GATEWAY_URL,
+      env.AGENT_TOOL_WEB_GATEWAY_BASE_URL
+    ) ?? DEFAULT_TOOL_GATEWAY_BASE_URL,
     webMaxResults: parsePositiveInteger(overrides.webMaxResults ?? env.AGENT_TOOL_WEB_MAX_RESULTS ?? env.TAVILY_MAX_RESULTS, 5),
     processExecEnabled: overrides.processExecEnabled ?? parseBoolean(env.AGENT_TOOL_PROCESS_EXEC_ENABLED, true),
     maxTimeoutMs: parsePositiveInteger(overrides.maxTimeoutMs ?? env.AGENT_TOOL_MAX_TIMEOUT_MS, DEFAULT_MAX_TIMEOUT_MS),

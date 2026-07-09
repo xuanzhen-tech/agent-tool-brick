@@ -125,8 +125,9 @@ POST /api/tools/cancel
 
 `skill_activate` 成功时，`agent-tool` 返回 `loadedSkill` payload。编排器负责持久化、去重，并把该 payload 渲染成可跨轮保留的 skill 上下文。
 
-缺少 web provider 配置时：
+web 和 email 工具：
 
 - `agent-tool` 仍可启动。
-- `web_search` 和 `web_fetch` 不暴露。
-- diagnostics 给出 warn。
+- `web_search`、`web_fetch` 和 `email_send` 默认通过 Server Tool Gateway 暴露。
+- Tavily 和 SMTP 配置只放在服务器，不放在产品仓库。
+- 如果服务器缺少 Tavily/SMTP 配置，工具调用返回明确 `failed` 结果；编排器不需要向产品层索要 key。
