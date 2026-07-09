@@ -6,30 +6,60 @@
  * 执行代码。
  */
 
+const SHELL_CONTEXT = createShellContext(process.platform);
+const SHELL_CONTEXT_DESCRIPTION = [
+  `Current OS: ${SHELL_CONTEXT.osLabel} (${SHELL_CONTEXT.platform}).`,
+  `mode='shell' runs ${SHELL_CONTEXT.shellCommand}; write ${SHELL_CONTEXT.syntaxLabel} syntax.`,
+  SHELL_CONTEXT.syntaxHint
+].join(" ");
+
+function createShellContext(platform) {
+  if (platform === "win32") {
+    return {
+      platform,
+      osLabel: "Windows",
+      shellCommand: "powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -Command",
+      syntaxLabel: "PowerShell",
+      syntaxHint: "Use $env:NAME for environment variables, PowerShell pipelines/conditionals, and commands such as Get-ChildItem or Select-String when relying on shell built-ins."
+    };
+  }
+  return {
+    platform,
+    osLabel: platform === "darwin" ? "macOS" : "Linux/Unix",
+    shellCommand: "/bin/bash -lc",
+    syntaxLabel: "bash/POSIX shell",
+    syntaxHint: "Use $NAME for environment variables, POSIX shell pipelines/conditionals, and standard Unix command syntax when relying on shell built-ins."
+  };
+}
+
 export const RUN_SHELL_TOOL = {
   name: "run_shell",
   description: [
     "Execute a focused terminal command in the current workspace with timeout, cancel, and output-size limits.",
+    SHELL_CONTEXT_DESCRIPTION,
     "Prefer mode='process' for Python, Node, git, npm, npx, and scripts because executable, args, and stdin are passed without shell quoting.",
-    "Use mode='shell' only for shell-specific syntax such as PowerShell pipelines, variables, redirection, and conditional execution.",
+    `Use mode='shell' only for ${SHELL_CONTEXT.syntaxLabel}-specific syntax such as pipelines, variables, redirection, and conditional execution.`,
     "Do not perform destructive file operations unless the user explicitly requested them and the target path has been verified."
   ].join(" "),
   schema: {
     type: "function",
     function: {
       name: "run_shell",
-      description: "Execute a focused terminal command in the current workspace with timeout, cancel, and output limits.",
+      description: [
+        "Execute a focused terminal command in the current workspace with timeout, cancel, and output limits.",
+        SHELL_CONTEXT_DESCRIPTION
+      ].join(" "),
       parameters: {
         type: "object",
         properties: {
           mode: {
             type: "string",
             enum: ["process", "shell"],
-            description: "Execution mode. Use process for argv/stdin, shell for PowerShell or shell syntax."
+            description: `Execution mode. Use process for argv/stdin, shell for ${SHELL_CONTEXT.syntaxLabel} syntax through ${SHELL_CONTEXT.shellCommand}.`
           },
           command: {
             type: "string",
-            description: "Shell command for mode=shell."
+            description: `Shell command for mode=shell. Write ${SHELL_CONTEXT.syntaxLabel} syntax for ${SHELL_CONTEXT.osLabel}.`
           },
           executable: {
             type: "string",
@@ -62,6 +92,7 @@ export const EXEC_COMMAND_TOOL = {
   name: "exec_command",
   description: [
     "Start a persistent terminal command and yield quickly with a session_id when it keeps running.",
+    SHELL_CONTEXT_DESCRIPTION,
     "Use this for dev servers, watchers, REPL-like processes, and commands that may need later stdin or output polling.",
     "Provide cmd for shell syntax, or executable plus args for direct process execution."
   ].join(" "),
@@ -69,18 +100,21 @@ export const EXEC_COMMAND_TOOL = {
     type: "function",
     function: {
       name: "exec_command",
-      description: "Start a persistent terminal command and return a session_id if it is still running.",
+      description: [
+        "Start a persistent terminal command and return a session_id if it is still running.",
+        SHELL_CONTEXT_DESCRIPTION
+      ].join(" "),
       parameters: {
         type: "object",
         properties: {
           cmd: {
             type: "string",
-            description: "Shell command to run. Omit when using executable plus args."
+            description: `Shell command to run with ${SHELL_CONTEXT.shellCommand}. Write ${SHELL_CONTEXT.syntaxLabel} syntax. Omit when using executable plus args.`
           },
           mode: {
             type: "string",
             enum: ["shell", "process"],
-            description: "Execution mode. shell uses cmd; process uses executable plus args."
+            description: `Execution mode. shell uses cmd through ${SHELL_CONTEXT.shellCommand}; process uses executable plus args.`
           },
           executable: {
             type: "string",

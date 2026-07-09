@@ -47,6 +47,8 @@ agent-tool call --tool run_shell --json "{\"mode\":\"process\",\"executable\":\"
 
 `run_shell` 用于有边界的一次性命令。`exec_command` 用于可能持续运行、需要后续 stdin、或需要轮询输出而不阻塞 agent turn 的命令。`exec_command` 会在进程仍运行时返回 `session_id`；随后调用 `write_stdin` 可以写入输入，或传空 `chars` 轮询增量输出。
 
+`run_shell` 和 `exec_command` 的模型可见 schema 会包含当前 OS 和 `mode="shell"` 的实际 shell 入口；Windows 下提示 PowerShell 语法，Linux/macOS 下提示 `/bin/bash -lc` / POSIX shell 语法。跨平台命令仍推荐优先使用 `mode="process"`。
+
 ## SDK 对象用法
 
 产品仓库组合 brick 时应优先使用对象 API。命令入口继续保留给 release smoke 和 host 管理的服务模式。
