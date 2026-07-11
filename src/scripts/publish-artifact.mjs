@@ -5,7 +5,10 @@
  * 同时把 file URL 替换为 OSS URL。
  */
 
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
+import http from "node:http";
+import https from "node:https";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -57,6 +60,10 @@ const upload = await publishFileToOss({
   contentType: ARTIFACT_CONTENT_TYPE
 });
 
+// agent-release-foundation@0.0.6 does not set object ACL during upload.
+// The descriptor URL is consumed directly by launchers, so make it readable.
+await setOssObjectAcl({ config: ossConfig, objectKey, acl: "public-read" });
+
 console.log("[publish-artifact] 5/6 create descriptor.oss.json");
 const publishedDescriptor = createPublishedBrickDescriptor({
   descriptor: localDescriptor,
@@ -67,6 +74,7 @@ const output = {
   metadata: {
     ...publishedDescriptor.metadata,
     objectKey,
+    objectAcl: "public-read",
     publishedBy: "agent-tool-brick"
   }
 };
@@ -99,4 +107,66 @@ async function loadDotEnvIfPresent(filePath) {
   } catch (error) {
     if (error.code !== "ENOENT") throw error;
   }
+}
+
+function setOssObjectAcl(input = {}) {
+  const config = input.config;
+  const objectKey = requireString(input.objectKey, "objectKey");
+  const acl = requireString(input.acl, "acl");
+  const encodedObjectKey = encodeObjectKey(objectKey);
+  const resourcePath = `/${encodedObjectKey}?acl`;
+  const date = new Date().toUTCString();
+  const canonicalizedHeaders = `x-oss-object-acl:${acl}\n`;
+  const canonicalResource = `/${config.bucket}/${encodedObjectKey}?acl`;
+  const stringToSign = ["PUT", "", "", date, `${canonicalizedHeaders}${canonicalResource}`].join("\n");
+  const signature = crypto
+    .createHmac("sha1", config.accessKeySecret)
+    .update(stringToSign)
+    .digest("base64");
+
+  const headers = {
+    Date: date,
+    Authorization: `OSS ${config.accessKeyId}:${signature}`,
+    "Content-Length": 0,
+    "x-oss-object-acl": acl
+  };
+  const client = config.protocol === "http:" ? http : https;
+
+  return new Promise((resolve, reject) => {
+    const request = client.request(
+      {
+        protocol: config.protocol,
+        hostname: config.endpointHost,
+        method: "PUT",
+        path: resourcePath,
+        headers
+      },
+      (response) => {
+        const chunks = [];
+        response.on("data", (chunk) => chunks.push(chunk));
+        response.on("end", () => {
+          const body = Buffer.concat(chunks).toString("utf8");
+          if (response.statusCode >= 200 && response.statusCode < 300) {
+            resolve({ statusCode: response.statusCode });
+            return;
+          }
+          reject(new Error(`OSS PUT ACL ${objectKey} failed: ${response.statusCode} ${body.slice(0, 500)}`));
+        });
+      }
+    );
+
+    request.on("error", reject);
+    request.end();
+  });
+}
+
+function encodeObjectKey(objectKey) {
+  return requireString(objectKey, "objectKey").replace(/^\/+/, "").split("/").map(encodeURIComponent).join("/");
+}
+
+function requireString(value, name) {
+  if (typeof value !== "string" || value.trim() === "") {
+    throw new Error(`${name} is required`);
+  }
+  return value.trim();
 }
