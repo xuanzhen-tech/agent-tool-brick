@@ -2,6 +2,10 @@
 
 `agent-tool` 是独立的工具执行积木。它把模型可调用工具封装成对象 API 和可选 HTTP 服务，让编排器不需要内嵌具体工具实现。
 
+相关边界文档：
+
+- [Memory Tool Boundary](docs/memory-tool-boundary.md)
+
 ## 能力边界
 
 本积木负责：
@@ -27,6 +31,7 @@
 - 编排 chat loop
 - 存储 thread
 - 对外 SSE 格式
+- 长期记忆存储、画像摘要、memory tools 生命周期
 - 桌面 UI、安装器、更新器或 release manifest 组合
 - 打包 Node、Python、浏览器或 rg 二进制
 - 管理 Playwright 浏览器 artifact 的下载、解压或版本选择
