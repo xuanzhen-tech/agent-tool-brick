@@ -337,16 +337,6 @@ const skillFind = await registry.execute({
 assert.equal(skillFind.status, "completed");
 assert.match(skillFind.content, /brief-writer/);
 
-const remoteSkillFind = await registry.execute({
-  schemaVersion: "agent-cli-tool.call.v1",
-  toolCallId: "call-skill-find-remote",
-  toolName: "skill_find",
-  arguments: { action: "install", package: "owner/repo@skill" },
-  workspace: { root: workspace }
-});
-assert.equal(remoteSkillFind.status, "blocked");
-assert.equal(remoteSkillFind.error.code, "skill_remote_operation_unsupported");
-
 const skillActivate = await registry.execute({
   schemaVersion: "agent-cli-tool.call.v1",
   toolCallId: "call-skill-activate",

@@ -231,42 +231,68 @@ export const WORKSPACE_SEARCH_TOOL = {
 
 export const SKILL_FIND_TOOL = {
   name: "skill_find",
-  description: "搜索当前已安装并已注册的 skill。此工具不会访问远端仓库，也不会下载或安装 skill。",
+  description: "Search installed and remote skills, or install a selected remote skill through the injected AgentSkill runtime.",
   schema: {
     type: "function",
     function: {
       name: "skill_find",
-      description: "只搜索本地已注册 skill，不返回完整 SKILL.md 内容。需要安装新 skill 时，应由产品层或 AgentSkill 的安装管理流程完成。",
+      description: "Search installed skills and remote providers, then install selected skills when needed. It never returns full SKILL.md content.",
       parameters: {
         type: "object",
         properties: {
+          action: {
+            type: "string",
+            enum: ["search", "install"],
+            description: "Use search to find local/remote skills, or install to download a selected candidate."
+          },
           query: {
             type: "string",
-            description: "按名称、描述、能力或依赖工具匹配本地已注册 skill 的文本关键词。"
+            description: "Text query matched against installed skills and remote providers."
+          },
+          source: {
+            type: "string",
+            enum: ["all", "openai-curated", "skills-sh", "skillhub", "clawhub"],
+            description: "Remote source to search or install from. clawhub is accepted as an alias for skillhub."
           },
           capability: {
             type: "string",
-            description: "可选，本地 skill 的精确 capability 标识。"
+            description: "Optional installed-skill capability id to match exactly."
           },
           requiredTool: {
             type: "string",
-            description: "可选，本地 skill 的 requiredTools 或 optionalTools 中必须存在的工具名。"
+            description: "Optional installed-skill required or optional tool name to match exactly."
+          },
+          package: {
+            type: "string",
+            description: "skills.sh package identifier to install, for example owner/repo@skill."
+          },
+          slug: {
+            type: "string",
+            description: "SkillHub slug to install."
+          },
+          name: {
+            type: "string",
+            description: "OpenAI curated skill name to install, or destination name for a GitHub skill URL."
+          },
+          url: {
+            type: "string",
+            description: "GitHub skill directory URL to install."
           },
           includeDisabled: {
             type: "boolean",
-            description: "是否包含已禁用 skill，默认 false。"
+            description: "Include disabled skills in the result. Defaults to false."
           },
           limit: {
             type: "integer",
             minimum: 1,
-            description: "最多返回的本地 skill 数量。"
+            description: "Maximum number of skills to return."
           }
         }
       }
     }
   },
-  permissions: ["skill.index.read"],
-  timeoutMs: 5_000,
+  permissions: ["skill.index.read", "network.fetch", "filesystem.write"],
+  timeoutMs: 300_000,
   cancelable: true
 };
 

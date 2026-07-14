@@ -27,7 +27,7 @@ import { createToolResult } from "../main/tool-contract.mjs";
 
 assert.equal(brickDefinition.id, "agent-tool");
 assert.equal(brickDefinition.kind, "tool");
-assert.equal(brickDefinition.version, "0.2.5");
+assert.equal(brickDefinition.version, "0.2.6");
 assert.equal(validateBrickDefinition(brickDefinition).ok, true);
 assert.equal(brickDefinition.runtimeDependencies.some((item) => item.type === "node-runtime" && item.required === true), true);
 assert.equal(brickDefinition.runtimeDependencies.some((item) => item.slot === "tool:rg" && item.required === false), true);
@@ -113,13 +113,9 @@ assert.match(playwrightShellSchema.function.description, /Product-injected Node 
 assert.match(playwrightShellSchema.function.description, /PLAYWRIGHT_BROWSERS_PATH/);
 await playwrightAwareTool.dispose();
 
-assert.equal(SKILL_FIND_TOOL.schema.function.description.includes("本地已注册"), true);
-assert.equal("action" in SKILL_FIND_TOOL.schema.function.parameters.properties, false);
-assert.equal("source" in SKILL_FIND_TOOL.schema.function.parameters.properties, false);
-assert.equal("package" in SKILL_FIND_TOOL.schema.function.parameters.properties, false);
-assert.equal("url" in SKILL_FIND_TOOL.schema.function.parameters.properties, false);
-assert.deepEqual(SKILL_FIND_TOOL.permissions, ["skill.index.read"]);
-assert.equal(SKILL_FIND_TOOL.timeoutMs, 5_000);
+assert.deepEqual(SKILL_FIND_TOOL.schema.function.parameters.properties.action.enum, ["search", "install"]);
+assert.equal(SKILL_FIND_TOOL.schema.function.parameters.properties.package.type, "string");
+assert.equal(SKILL_FIND_TOOL.timeoutMs, 300_000);
 assert.equal(EMAIL_SEND_TOOL.schema.function.parameters.required.includes("to"), true);
 assert.equal(EMAIL_SEND_TOOL.schema.function.parameters.required.includes("subject"), true);
 
