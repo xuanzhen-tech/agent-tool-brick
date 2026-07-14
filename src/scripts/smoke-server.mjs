@@ -17,38 +17,43 @@ import { createAgentToolServer } from "../main/server.mjs";
 const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "agent-tool-server-"));
 await fs.writeFile(path.join(workspace, "server-note.txt"), "server needle", "utf8");
 
-// 这个 skill fixture 用来证明当 AGENT_TOOL_SKILL_INDEX 指向合法 index 文件时，
-// 服务能够暴露 skill_find 和 skill_activate。
+// 这个 fixture 模拟产品注入的 AgentSkill 对象。服务不自行读取 index 来伪造
+// 远端能力，skill_find / skill_activate 必须委托真实的 skill runtime。
 const skillRoot = path.join(workspace, "skills", "server-skill");
 await fs.mkdir(skillRoot, { recursive: true });
 const skillFile = path.join(skillRoot, "SKILL.md");
 await fs.writeFile(skillFile, "---\nname: server-skill\ndescription: Server smoke skill.\n---\n\n# Server Skill\n", "utf8");
-const skillIndexPath = path.join(workspace, "agent-skill.index.json");
-await fs.writeFile(skillIndexPath, JSON.stringify({
-  schemaVersion: "agent-skill.index.v1",
-  generatedAt: new Date().toISOString(),
-  roots: [],
-  skills: [{
-    id: "server-skill",
-    name: "server-skill",
-    description: "Server smoke skill.",
-    path: skillFile,
-    source: "workspace",
-    capabilities: ["smoke"],
-    requiredTools: [],
-    optionalTools: [],
-    requiredEnv: [],
-    enabled: true,
-    contentHash: "smoke",
-    bytes: 80
-  }],
-  diagnostics: []
-}, null, 2), "utf8");
 const webGateway = await createMockWebGateway();
+const skillCalls = [];
+const skillRuntime = {
+  definitions: [{ name: "server-skill", description: "Server smoke skill." }],
+  async find(input, context) {
+    skillCalls.push({ operation: "find", input, context });
+    if (input.action === "install") {
+      return {
+        action: "install",
+        installed: [{ name: "remote-skill", path: path.join(skillRoot, "remote-skill", "SKILL.md"), source: "skills-sh" }],
+        skills: [{ name: "remote-skill" }]
+      };
+    }
+    return {
+      action: "search",
+      skills: [{ name: "server-skill" }],
+      candidates: [{ name: "remote-skill", package: "owner/repo@remote-skill", source: "skills-sh" }]
+    };
+  },
+  async activate(name, context) {
+    skillCalls.push({ operation: "activate", name, context });
+    if (name !== "server-skill") throw new Error(`Unknown skill: ${name}`);
+    return {
+      activated: true,
+      loadedSkill: { name, content: "# Server Skill", contentHash: "smoke", bytes: 14 }
+    };
+  }
+};
 const config = {
   ...resolveServiceConfig(process.env, {
     workspaceRoot: workspace,
-    skillIndexPath,
     webGatewayBaseUrl: webGateway.url,
     webGatewayToken: "smoke-token",
     maxTimeoutMs: 10_000,
@@ -59,7 +64,7 @@ const config = {
   }),
   port: 0
 };
-const runtime = await createAgentToolServer({ config });
+const runtime = await createAgentToolServer({ config, skillRuntime });
 const { url } = await runtime.listen();
 
 try {
@@ -77,6 +82,31 @@ try {
   assert.equal(manifest.tools.some((tool) => tool.name === "skill_find"), true);
   assert.equal(manifest.tools.some((tool) => tool.name === "web_search"), true);
   assert.equal(manifest.tools.some((tool) => tool.name === "email_send"), true);
+
+  const skillSearch = await postJson(`${url}/api/tools/call`, {
+    schemaVersion: "agent-cli-tool.call.v1",
+    toolCallId: "server-skill-search",
+    toolName: "skill_find",
+    arguments: { action: "search", source: "skills-sh", query: "remote" },
+    workspace: { root: workspace }
+  });
+  assert.equal(skillSearch.status, "completed");
+  assert.equal(skillSearch.details.candidates[0].source, "skills-sh");
+
+  const skillInstall = await postJson(`${url}/api/tools/call`, {
+    schemaVersion: "agent-cli-tool.call.v1",
+    toolCallId: "server-skill-install",
+    toolName: "skill_find",
+    arguments: { action: "install", source: "skills-sh", package: "owner/repo@remote-skill" },
+    workspace: { root: workspace }
+  });
+  assert.equal(skillInstall.status, "completed");
+  assert.equal(skillInstall.details.installed[0].source, "skills-sh");
+  assert.deepEqual(skillCalls.find((call) => call.operation === "find" && call.input.action === "install")?.input, {
+    action: "install",
+    source: "skills-sh",
+    package: "owner/repo@remote-skill"
+  });
 
   if (manifest.tools.some((tool) => tool.name === "workspace_search")) {
     const missingPathSearch = await postJson(`${url}/api/tools/call`, {
@@ -175,18 +205,6 @@ try {
   assert.equal(skillResult.status, "completed");
   assert.equal(skillResult.details.loadedSkill.name, "server-skill");
 
-  // 已注册 skill 的源文件可能被用户或同步进程删掉；服务必须返回 tool result，不能 500。
-  await fs.rm(skillFile);
-  const staleSkillResult = await postJson(`${url}/api/tools/call`, {
-    schemaVersion: "agent-cli-tool.call.v1",
-    toolCallId: "server-stale-skill-call",
-    toolName: "skill_activate",
-    arguments: { skill: "server-skill" },
-    workspace: { root: workspace }
-  });
-  assert.equal(staleSkillResult.status, "failed");
-  assert.equal(staleSkillResult.error.code, "tool_execution_failed");
-
   const webSearch = await postJson(`${url}/api/tools/call`, {
     schemaVersion: "agent-cli-tool.call.v1",
     toolCallId: "server-web-search",
@@ -220,6 +238,17 @@ try {
   });
   assert.equal(email.status, "completed");
   assert.equal(email.details.messageId, "mock-message-id");
+
+  // 独立 serve 没有 AgentSkill 对象时不能承诺远端能力，因此不暴露 skill 工具。
+  const standaloneRuntime = await createAgentToolServer({ config: { ...config, port: 0 } });
+  const standalone = await standaloneRuntime.listen();
+  try {
+    const standaloneManifest = await getJson(`${standalone.url}/api/tools/manifest`);
+    assert.equal(standaloneManifest.tools.some((tool) => tool.name === "skill_find"), false);
+    assert.equal(standaloneManifest.tools.some((tool) => tool.name === "skill_activate"), false);
+  } finally {
+    await standaloneRuntime.close();
+  }
 } finally {
   await runtime.close();
   await webGateway.close();

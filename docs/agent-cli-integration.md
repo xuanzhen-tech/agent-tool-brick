@@ -13,7 +13,16 @@ const agent = new AgentCli({ workspace, toolRuntime: agentTool, skillRuntime });
 
 `workspace` 属于 `AgentCli` 的运行上下文，不是 `AgentTool` 产品主入口的必填项。`AgentCli` 在派发工具调用时会把当前 workspace 放入 context，`AgentTool` 只消费这个 context。
 
-服务模式仍可用于 host launcher。host 启动 `agent-tool serve` 后，可向编排器注入：
+服务模式仍可用于 host launcher。产品应由已组合的 `AgentTool` 对象启动服务：
+
+```js
+const skillRuntime = new AgentSkill();
+const toolRuntime = new AgentTool({ runtimeDependencies, skillRuntime });
+const toolServer = await toolRuntime.createServer();
+const { url } = await toolServer.listen();
+```
+
+随后向编排器注入：
 
 ```text
 AGENT_CLI_TOOL_ENDPOINT=http://127.0.0.1:8791

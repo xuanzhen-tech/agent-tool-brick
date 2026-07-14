@@ -90,21 +90,21 @@ export class AgentTool {
       ...this.config,
       workspaceRoot: context.workspace ?? context.workingDirectory ?? this.workspace ?? this.config.workspaceRoot
     };
-    const report = await createDiagnosticsReport(config, { terminalManager: this.terminalManager });
-    if (this.skillRuntime) {
-      report.checks.push({
-        id: "tool.skill_runtime",
-        status: "pass",
-        summary: "AgentSkill object is injected; skill_find and skill_activate are exposed.",
-        detail: `${this.skillRuntime.definitions?.length ?? 0} cached skills`
-      });
-      report.status = report.checks.some((check) => check.status === "fail")
-        ? "fail"
-        : report.checks.some((check) => check.status === "warn")
-          ? "warn"
-          : "pass";
-    }
-    return report;
+    return await createDiagnosticsReport(config, {
+      terminalManager: this.terminalManager,
+      skillRuntime: this.skillRuntime
+    });
+  }
+
+  // 使用同一对象启动 HTTP transport，保证 skill runtime 和终端会话不会被重复创建。
+  async createServer(input = {}) {
+    const { createAgentToolServer } = await import("./server.mjs");
+    return await createAgentToolServer({
+      ...input,
+      config: input.config ?? this.config,
+      terminalManager: input.terminalManager ?? this.terminalManager,
+      skillRuntime: input.skillRuntime ?? this.skillRuntime
+    });
   }
 
   async dispose() {

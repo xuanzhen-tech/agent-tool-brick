@@ -2,7 +2,7 @@
  * 直接工具执行的端到端 smoke 测试。
  *
  * fixture workspace 会在不启动 HTTP 服务的情况下，覆盖 run_shell、可选的
- * rg 搜索、通过注入 index 进行 skill 激活，以及面向模型的工具结果压缩。
+ * rg 搜索、通过注入 AgentSkill 进行 skill 激活，以及面向模型的工具结果压缩。
  */
 
 import assert from "node:assert/strict";
@@ -28,39 +28,14 @@ finalizeOutput(splitUtf8Collector);
 assert.equal(splitUtf8Collector.value, "你好");
 assert.equal(splitUtf8Collector.value.includes("\uFFFD"), false);
 
-// 临时 skill index 模拟 agent-skill 产出的合同。
+// 临时 skill 文件作为注入 AgentSkill runtime 的激活结果。
 const skillRoot = path.join(workspace, "skills", "brief-writer");
 await fs.mkdir(skillRoot, { recursive: true });
 const skillFile = path.join(skillRoot, "SKILL.md");
 await fs.writeFile(skillFile, "---\nname: brief-writer\ndescription: Write brief replies.\n---\n\n# Brief Writer\n\nKeep replies short.\n", "utf8");
-const skillIndexPath = path.join(workspace, "agent-skill.index.json");
-await fs.writeFile(skillIndexPath, JSON.stringify({
-  schemaVersion: "agent-skill.index.v1",
-  generatedAt: new Date().toISOString(),
-  roots: [],
-  skills: [
-    {
-      id: "brief-writer",
-      name: "brief-writer",
-      version: "0.1.0",
-      description: "Write brief replies.",
-      path: skillFile,
-      source: "workspace",
-      capabilities: ["writing.brief"],
-      requiredTools: ["run_shell"],
-      optionalTools: ["workspace_search"],
-      requiredEnv: [],
-      enabled: true,
-      contentHash: "smoke",
-      bytes: 100
-    }
-  ],
-  diagnostics: []
-}, null, 2), "utf8");
 const config = {
   ...resolveServiceConfig(process.env, {
     workspaceRoot: workspace,
-    skillIndexPath,
     webGatewayBaseUrl: "http://127.0.0.1:0",
     webGatewayToken: "smoke-token",
     maxTimeoutMs: 5_000,
@@ -70,7 +45,26 @@ const config = {
     terminalMaxOutputBytes: 8_000
   })
 };
-const registry = await createToolRegistry(config);
+const injectedSkillRuntime = {
+  definitions: [{ name: "brief-writer", description: "Write brief replies." }],
+  async find(filter) {
+    if (filter.query === "runtime-error") throw new Error("Injected skill runtime failed.");
+    return {
+      skills: [{
+        name: "brief-writer",
+        capability: filter.capability,
+        query: filter.query
+      }]
+    };
+  },
+  async activate(skill) {
+    if (skill !== "brief-writer") throw new Error(`Unknown skill: ${skill}`);
+    return {
+      loadedSkill: { name: skill, content: "Keep replies short.", contentHash: "hash", bytes: 19 }
+    };
+  }
+};
+const registry = await createToolRegistry(config, { skillRuntime: injectedSkillRuntime });
 
 const missingSession = await registry.execute({
   schemaVersion: "agent-cli-tool.call.v1",
@@ -348,17 +342,16 @@ assert.equal(skillActivate.status, "completed");
 assert.equal(skillActivate.details.loadedSkill.name, "brief-writer");
 assert.match(skillActivate.details.loadedSkill.content, /Keep replies short/);
 
-// 注册后 index 可能被外部进程删除；这种可恢复失败必须是结构化 tool result。
-await fs.rm(skillIndexPath);
-const staleSkillIndex = await registry.execute({
+// 注入的 AgentSkill 运行时异常也必须被 registry 转成可恢复 tool result。
+const failedSkillRuntime = await registry.execute({
   schemaVersion: "agent-cli-tool.call.v1",
-  toolCallId: "call-stale-skill-index",
+  toolCallId: "call-failed-skill-runtime",
   toolName: "skill_find",
-  arguments: { query: "brief" },
+  arguments: { query: "runtime-error" },
   workspace: { root: workspace }
 });
-assert.equal(staleSkillIndex.status, "failed");
-assert.equal(staleSkillIndex.error.code, "tool_execution_failed");
+assert.equal(failedSkillRuntime.status, "failed");
+assert.equal(failedSkillRuntime.error.code, "tool_execution_failed");
 
 const objectTool = new AgentTool({
   workspace,
@@ -392,6 +385,34 @@ assert.equal(objectTool.definitions.some((tool) => tool.function?.name === "writ
 const objectSkill = await objectTool.execute("skill_activate", { skill: "brief-writer" }, { workspace });
 assert.equal(objectSkill.status, "completed");
 assert.equal(objectSkill.details.loadedSkill.name, "brief-writer");
+
+// 同一 AgentTool 对象启动 HTTP 服务时，服务也必须复用注入的 AgentSkill runtime。
+const objectServer = await objectTool.createServer({
+  config: { ...objectTool.config, port: 0 }
+});
+const { url: objectServerUrl } = await objectServer.listen();
+try {
+  const manifestResponse = await fetch(`${objectServerUrl}/api/tools/manifest`);
+  const manifest = await manifestResponse.json();
+  assert.equal(manifest.tools.some((tool) => tool.name === "skill_find"), true);
+
+  const skillResponse = await fetch(`${objectServerUrl}/api/tools/call`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      schemaVersion: "agent-cli-tool.call.v1",
+      toolCallId: "object-server-skill-find",
+      toolName: "skill_find",
+      arguments: { action: "search", source: "skills-sh", query: "brief" },
+      workspace: { root: workspace }
+    })
+  });
+  const skillResponseBody = await skillResponse.json();
+  assert.equal(skillResponseBody.status, "completed");
+  assert.equal(skillResponseBody.details.skills[0].name, "brief-writer");
+} finally {
+  await objectServer.close();
+}
 await objectTool.dispose();
 
 const pythonAliasTool = new AgentTool({

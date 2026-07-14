@@ -20,6 +20,11 @@ export async function createAgentToolServer(input = {}) {
   const config = input.config ?? resolveServiceConfig(process.env, input);
   const activeCalls = new Map();
   const terminalManager = input.terminalManager ?? createTerminalSessionManager(config);
+  const skillRuntime = input.skillRuntime;
+
+  async function createRegistry() {
+    return await createToolRegistry(config, { terminalManager, skillRuntime });
+  }
 
   const server = http.createServer(async (request, response) => {
     try {
@@ -34,11 +39,11 @@ export async function createAgentToolServer(input = {}) {
         return;
       }
       if (request.method === "GET" && url.pathname === "/api/tools/diagnostics") {
-        sendJson(response, 200, await createDiagnosticsReport(config, { terminalManager }));
+        sendJson(response, 200, await createDiagnosticsReport(config, { terminalManager, skillRuntime }));
         return;
       }
       if (request.method === "GET" && url.pathname === "/api/tools/manifest") {
-        const registry = await createToolRegistry(config, { terminalManager });
+        const registry = await createRegistry();
         sendJson(response, 200, registry.manifest);
         return;
       }
@@ -50,7 +55,7 @@ export async function createAgentToolServer(input = {}) {
           return;
         }
 
-        const registry = await createToolRegistry(config, { terminalManager });
+        const registry = await createRegistry();
         const controller = new AbortController();
         activeCalls.set(body.toolCallId, {
           controller,

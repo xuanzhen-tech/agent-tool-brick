@@ -140,7 +140,6 @@ AGENT_TOOL_PLAYWRIGHT_BROWSERS_PATH
 AGENT_TOOL_NODE_PACKAGE_PATHS
 AGENT_TOOL_NODE_IMPORT_REGISTERS
 AGENT_TOOL_NODE_OPTIONS
-AGENT_TOOL_SKILL_INDEX
 AGENT_TOOL_GATEWAY_BASE_URL
 AGENT_TOOL_WEB_MAX_RESULTS
 AGENT_TOOL_PROCESS_EXEC_ENABLED
@@ -160,7 +159,7 @@ AGENT_TOOL_RESULT_COMPRESSION
 
 `PLAYWRIGHT_BROWSERS_PATH` 来自可选的 `playwright-browsers` runtime dependency。配置后，Node 子进程可以使用该路径下的 Chromium 缓存；Playwright JS library 本身仍由产品仓库依赖提供。
 
-`AGENT_TOOL_SKILL_INDEX` 只用于服务模式兼容。对象模式下应通过 `skillRuntime` 注入 `AgentSkill` 实例来暴露 `skill_find` 和 `skill_activate`。服务模式的 index-only 路径只代表“已安装 skills 的轻量查询”，不负责远端 provider 搜索或安装。
+`skill_find` 和 `skill_activate` 只由注入的 `AgentSkill` 实例提供。独立执行 `agent-tool serve` 时没有该对象，因此不会暴露这两个工具；产品需要 HTTP transport 时应通过 `agentTool.createServer()` 启动，以复用同一个 `AgentSkill` 和终端会话。
 
 `AGENT_TOOL_GATEWAY_BASE_URL` 是可选覆盖项。默认指向固定 Server Tool Gateway；Tavily 和 SMTP 配置必须放在服务器环境变量中，不放在产品仓库或客户端环境变量中。
 
@@ -198,7 +197,7 @@ npm run release:local
 runtime artifact 是 `win32-x64` zip：
 
 ```text
-dist/agent-tool-0.2.6-win32-x64.zip
+dist/agent-tool-0.2.7-win32-x64.zip
 dist/build-artifact.json
 dist/descriptor.local.json
 dist/descriptor.oss.placeholder.json

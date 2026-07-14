@@ -39,7 +39,6 @@ export function createAgentToolLaunchConfig(input = {}) {
   setEnv(env, "AGENT_TOOL_NODE_IMPORT_REGISTERS", joinList(input.nodeImportRegisterPaths ?? runtimeConfig.nodeImportRegisterPaths, path.delimiter));
   setEnv(env, "AGENT_TOOL_NODE_OPTIONS", joinList(input.nodeOptions ?? runtimeConfig.nodeOptions, " "));
   setEnv(env, "AGENT_TOOL_TOKEN", input.token);
-  setEnv(env, "AGENT_TOOL_SKILL_INDEX", input.skillIndexPath);
   setEnv(env, "AGENT_TOOL_GATEWAY_BASE_URL", input.toolGatewayBaseUrl);
 
   if (input.processExecEnabled !== undefined) {
@@ -118,7 +117,6 @@ export function createAgentToolRuntimeContract(input = {}) {
       nodePackagePaths: "AGENT_TOOL_NODE_PACKAGE_PATHS",
       nodeImportRegisterPaths: "AGENT_TOOL_NODE_IMPORT_REGISTERS",
       nodeOptions: "AGENT_TOOL_NODE_OPTIONS",
-      skillIndex: "AGENT_TOOL_SKILL_INDEX",
       toolGatewayBaseUrl: "AGENT_TOOL_GATEWAY_BASE_URL",
       webMaxResults: "AGENT_TOOL_WEB_MAX_RESULTS",
       processExecEnabled: "AGENT_TOOL_PROCESS_EXEC_ENABLED",
@@ -180,7 +178,6 @@ export function resolveServiceConfig(env = process.env, overrides = {}) {
     nodeImportRegisterPaths: normalizeDelimitedList(overrides.nodeImportRegisterPaths ?? env.AGENT_TOOL_NODE_IMPORT_REGISTERS, path.delimiter),
     nodeOptions: normalizeDelimitedList(overrides.nodeOptions ?? env.AGENT_TOOL_NODE_OPTIONS, " "),
     nodePackageNames: normalizeDelimitedList(overrides.nodePackageNames, ","),
-    skillIndexPath: firstNonEmpty(overrides.skillIndexPath, env.AGENT_TOOL_SKILL_INDEX),
     toolGatewayBaseUrl: firstNonEmpty(
       overrides.toolGatewayBaseUrl,
       overrides.webGatewayBaseUrl,

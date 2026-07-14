@@ -11,7 +11,6 @@ import { promisify } from "node:util";
 
 import { brickDefinition } from "../brick-definition.mjs";
 import { isRgAvailable } from "./search-runtime.mjs";
-import { isSkillIndexAvailable } from "./skill-runtime.mjs";
 import { isEmailProviderAvailable } from "./email-runtime.mjs";
 import { isWebProviderAvailable } from "./web-runtime.mjs";
 
@@ -39,7 +38,7 @@ export async function createDiagnosticsReport(config, options = {}) {
   checks.push(createProcessExecCheck(config));
   checks.push(createTerminalSessionCheck(config, options.terminalManager));
   checks.push(await createRgRuntimeCheck(config));
-  checks.push(await createSkillIndexCheck(config));
+  checks.push(createSkillRuntimeCheck(options.skillRuntime));
   checks.push(createWebProviderCheck(config));
   checks.push(createEmailProviderCheck(config));
 
@@ -107,21 +106,20 @@ async function createPythonRuntimeCheck(config) {
   };
 }
 
-async function createSkillIndexCheck(config) {
-  const availability = await isSkillIndexAvailable(config.skillIndexPath);
-  if (availability.available) {
+function createSkillRuntimeCheck(skillRuntime) {
+  if (skillRuntime && typeof skillRuntime.find === "function" && typeof skillRuntime.activate === "function") {
     return {
-      id: "tool.skill_index",
+      id: "tool.skill_runtime",
       status: "pass",
-      summary: "Skill index is available; skill_find and skill_activate are exposed.",
-      detail: availability.detail
+      summary: "AgentSkill runtime is injected; skill_find and skill_activate are exposed.",
+      detail: `${skillRuntime.definitions?.length ?? 0} cached skills`
     };
   }
   return {
-    id: "tool.skill_index",
+    id: "tool.skill_runtime",
     status: "warn",
-    summary: "Skill index is not available; skill_find and skill_activate will not be exposed.",
-    detail: availability.detail
+    summary: "AgentSkill runtime is not injected; skill_find and skill_activate will not be exposed.",
+    detail: "Inject AgentSkill when creating AgentTool or the HTTP service."
   };
 }
 
