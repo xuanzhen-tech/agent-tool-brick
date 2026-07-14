@@ -69,6 +69,7 @@ jobs:
           node --check src/scripts/publish-artifact.mjs
           node --check src/scripts/publish-artifact-placeholder.mjs
           node --check src/scripts/smoke-contract.mjs
+          node --check src/scripts/smoke-agent-cli-gateway-kimi.mjs
           node --check src/scripts/smoke-server.mjs
           node --check src/scripts/smoke-tools.mjs
           node --check src/scripts/verify.mjs

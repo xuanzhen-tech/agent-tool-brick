@@ -198,7 +198,7 @@ npm run release:local
 runtime artifact 是 `win32-x64` zip：
 
 ```text
-dist/agent-tool-0.2.4-win32-x64.zip
+dist/agent-tool-0.2.5-win32-x64.zip
 dist/build-artifact.json
 dist/descriptor.local.json
 dist/descriptor.oss.placeholder.json

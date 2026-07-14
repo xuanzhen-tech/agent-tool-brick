@@ -38,6 +38,14 @@ export async function isSkillIndexAvailable(skillIndexPath) {
 }
 
 export async function executeSkillFind(call, config) {
+  const unsupportedArguments = findUnsupportedSkillFindArguments(call.arguments);
+  if (unsupportedArguments.length) {
+    return blockedResult(
+      "skill_remote_operation_unsupported",
+      `skill_find only searches locally registered skills. Unsupported arguments: ${unsupportedArguments.join(", ")}.`
+    );
+  }
+
   const index = await loadSkillIndex(config.skillIndexPath);
   const query = stringField(call.arguments?.query)?.toLowerCase();
   const capability = stringField(call.arguments?.capability);
@@ -65,6 +73,17 @@ export async function executeSkillFind(call, config) {
       skills
     }
   };
+}
+
+// 保留对旧调用方的明确失败，而不是忽略曾经承诺远端搜索或安装的参数。
+function findUnsupportedSkillFindArguments(argumentsValue) {
+  if (!argumentsValue || typeof argumentsValue !== "object" || Array.isArray(argumentsValue)) return [];
+  const unsupported = [];
+  if (argumentsValue.action !== undefined && argumentsValue.action !== "search") unsupported.push("action");
+  for (const key of ["source", "package", "slug", "name", "url"]) {
+    if (argumentsValue[key] !== undefined) unsupported.push(key);
+  }
+  return unsupported;
 }
 
 export async function executeSkillActivate(call, config) {

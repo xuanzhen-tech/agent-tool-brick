@@ -91,13 +91,46 @@ export async function createToolRegistry(config, options = {}) {
           }
         };
       }
-      const execution = await executor(call, config, signal);
+      let execution;
+      try {
+        execution = await executor(call, config, signal);
+      } catch (error) {
+        execution = createExecutionFailureResult(call, signal, error);
+      }
       return compressToolExecutionResult({
         toolName: call.toolName,
         toolCallId: call.toolCallId,
         result: execution,
         compressionEnabled: config.resultCompressionEnabled
       }).result;
+    }
+  };
+}
+
+// 工具输入、索引或工作区可能在调用前后变化。这类可预期异常必须回到模型，
+// 让它可以修正参数或选择其他工具，而不是由 HTTP 层把它伪装成服务故障。
+function createExecutionFailureResult(call, signal, error) {
+  const interrupted = signal?.aborted === true;
+  const message = error instanceof Error ? error.message : String(error);
+  const status = interrupted ? "interrupted" : "failed";
+  const code = interrupted ? "interrupted" : "tool_execution_failed";
+  return {
+    status,
+    content: interrupted
+      ? `Tool call was interrupted: ${message}`
+      : `Tool execution failed: ${message}`,
+    details: {
+      toolName: call.toolName,
+      toolCallId: call.toolCallId,
+      interrupted,
+      failure: {
+        code,
+        message
+      }
+    },
+    error: {
+      code,
+      message
     }
   };
 }

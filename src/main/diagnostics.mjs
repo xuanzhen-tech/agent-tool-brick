@@ -224,7 +224,9 @@ function createTerminalSessionCheck(config, terminalManager) {
   return {
     id: "tool.terminal_session",
     status: "pass",
-    summary: "exec_command and write_stdin are enabled.",
+    summary: stats.running > 0
+      ? "exec_command is enabled; write_stdin is currently exposed for active terminal sessions."
+      : "exec_command is enabled; write_stdin will be exposed after a terminal session starts.",
     detail: `running=${stats.running}; sessions=${stats.sessions}/${stats.maxSessions}; sessionTtlMs=${stats.sessionTtlMs}; maxOutputBytes=${stats.maxOutputBytes}`
   };
 }

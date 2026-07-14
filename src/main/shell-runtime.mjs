@@ -75,7 +75,7 @@ export async function executeRunShell(call, config, signal) {
       details,
       error: {
         code: "interrupted",
-        message: "Tool call was interrupted."
+        message: "命令已被中断，未验证执行成功，不能据此宣称任务完成。"
       }
     };
   }
@@ -88,7 +88,9 @@ export async function executeRunShell(call, config, signal) {
     ...(status === "failed" ? {
       error: {
         code: result.timedOut ? "timeout" : "nonzero_exit",
-        message: result.timedOut ? `Command timed out after ${timeoutMs}ms.` : `Command exited with code ${result.exitCode}.`
+        message: result.timedOut
+          ? `命令在 ${timeoutMs}ms 后超时，未验证执行成功，不能据此宣称任务完成。`
+          : `命令以退出码 ${result.exitCode} 结束，未验证执行成功，不能据此宣称任务完成。`
       }
     } : {})
   };
@@ -134,7 +136,14 @@ export function buildShellCommandSpec(command) {
   if (process.platform === "win32") {
     return {
       executable: "powershell.exe",
-      args: ["-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command]
+      args: [
+        "-NoLogo",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        `$utf8 = [System.Text.UTF8Encoding]::new($false); [Console]::OutputEncoding = $utf8; $OutputEncoding = $utf8; ${command}`
+      ]
     };
   }
   return { executable: "/bin/bash", args: ["-lc", command] };

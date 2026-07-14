@@ -1,6 +1,6 @@
 {
   "name": "@xuanzhen-tech/agent-tool-brick",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "description": "Agent tool execution brick with a local tool service boundary.",
   "type": "module",
   "repository": {
@@ -33,6 +33,7 @@
     "publish:npm": "npm publish",
     "release:local": "npm run smoke:cli && npm run smoke:contract && npm run smoke:tools && npm run smoke:server && npm run build:artifact && npm run create:descriptor && npm run publish:artifact:placeholder && npm run verify && npm run pack:dry-run",
     "smoke:agent-cli-runtime-integration": "node src/scripts/smoke-agent-cli-runtime-integration.mjs",
+    "smoke:agent-cli-gateway-kimi": "node src/scripts/smoke-agent-cli-gateway-kimi.mjs",
     "smoke:five-brick-integration": "node src/scripts/smoke-five-brick-integration.mjs",
     "smoke:five-brick-kimi": "node src/scripts/smoke-five-brick-integration.mjs --real-kimi",
     "smoke:cli": "node src/cli.mjs version && node src/cli.mjs health --json && node src/cli.mjs diagnostics --json && node src/cli.mjs manifest --json",

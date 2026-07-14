@@ -10,7 +10,7 @@ import { spawn } from "node:child_process";
 import path from "node:path";
 
 import { numberField, stringField } from "./env.mjs";
-import { appendOutput, formatCommandPartForAudit, killProcessTree } from "./process-runtime.mjs";
+import { appendOutput, createOutputCollector, finalizeOutput, formatCommandPartForAudit, killProcessTree } from "./process-runtime.mjs";
 import { buildRuntimeProcessEnv, resolveRuntimeProcessExecutable } from "./runtime-process-env.mjs";
 import { buildShellCommandSpec } from "./shell-runtime.mjs";
 import { getWorkspaceRootFromCall, resolveInsideWorkspace } from "./workspace.mjs";
@@ -181,6 +181,8 @@ class TerminalSessionManager {
       cwd,
       stdout: "",
       stderr: "",
+      stdoutCollector: createOutputCollector(maxOutputBytes),
+      stderrCollector: createOutputCollector(maxOutputBytes),
       stdoutReadOffset: 0,
       stderrReadOffset: 0,
       maxOutputBytes,
@@ -211,14 +213,14 @@ class TerminalSessionManager {
     session.timeoutTimer.unref?.();
 
     child.stdout?.on("data", (chunk) => {
-      const next = appendOutput(session.stdout, chunk, maxOutputBytes);
-      session.stdout = next.value;
-      session.truncated ||= next.truncated;
+      appendOutput(session.stdoutCollector, chunk);
+      session.stdout = session.stdoutCollector.value;
+      session.truncated ||= session.stdoutCollector.truncated;
     });
     child.stderr?.on("data", (chunk) => {
-      const next = appendOutput(session.stderr, chunk, maxOutputBytes);
-      session.stderr = next.value;
-      session.truncated ||= next.truncated;
+      appendOutput(session.stderrCollector, chunk);
+      session.stderr = session.stderrCollector.value;
+      session.truncated ||= session.stderrCollector.truncated;
     });
     child.on("error", (error) => {
       session.errorMessage = error instanceof Error ? error.message : String(error);
@@ -277,19 +279,19 @@ class TerminalSessionManager {
         stderr,
         timedOut: session.timedOut,
         interrupted: session.interrupted,
-        next: session.running ? "Use write_stdin with this session_id to send input or poll output." : undefined
+        next: session.running ? "使用此 session_id 调用 write_stdin 发送输入或轮询增量输出。" : undefined
       }, null, 2),
       details,
       ...(status === "failed" ? {
         error: {
           code: session.timedOut ? "timeout" : "terminal_command_failed",
-          message: session.timedOut ? "Terminal command timed out." : (session.errorMessage || `Terminal command exited with code ${session.exitCode}.`)
+          message: createTerminalFailureMessage(session)
         }
       } : {}),
       ...(status === "interrupted" ? {
         error: {
           code: "interrupted",
-          message: session.cancelReason || "Terminal session interrupted."
+          message: `${session.cancelReason || "终端会话已被中断。"} 未验证执行成功，不能据此宣称任务完成。`
         }
       } : {})
     };
@@ -307,6 +309,11 @@ class TerminalSessionManager {
 
 function finishSession(session, exitCode) {
   if (!session.running) return;
+  finalizeOutput(session.stdoutCollector);
+  finalizeOutput(session.stderrCollector);
+  session.stdout = session.stdoutCollector.value;
+  session.stderr = session.stderrCollector.value;
+  session.truncated ||= session.stdoutCollector.truncated || session.stderrCollector.truncated;
   session.running = false;
   session.exitCode = exitCode;
   session.lastUsedAt = new Date().toISOString();
@@ -405,10 +412,23 @@ function blockedResult(reasonCode, reason) {
 function failedResult(code, message, details = {}) {
   return {
     status: "failed",
-    content: message,
+    content: `终端操作失败：${message}。未验证执行成功，不能据此宣称任务完成。`,
     details,
-    error: { code, message }
+    error: {
+      code,
+      message: `终端操作失败：${message}。未验证执行成功，不能据此宣称任务完成。`
+    }
   };
+}
+
+function createTerminalFailureMessage(session) {
+  if (session.timedOut) {
+    return "终端命令超时，未验证执行成功，不能据此宣称任务完成。";
+  }
+  if (session.errorMessage) {
+    return `终端命令执行失败：${session.errorMessage}。未验证执行成功，不能据此宣称任务完成。`;
+  }
+  return `终端命令以退出码 ${session.exitCode} 结束，未验证执行成功，不能据此宣称任务完成。`;
 }
 
 function attachAbort(signal, listener) {

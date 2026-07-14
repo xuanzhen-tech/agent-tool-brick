@@ -27,7 +27,7 @@ import { createToolResult } from "../main/tool-contract.mjs";
 
 assert.equal(brickDefinition.id, "agent-tool");
 assert.equal(brickDefinition.kind, "tool");
-assert.equal(brickDefinition.version, "0.2.4");
+assert.equal(brickDefinition.version, "0.2.5");
 assert.equal(validateBrickDefinition(brickDefinition).ok, true);
 assert.equal(brickDefinition.runtimeDependencies.some((item) => item.type === "node-runtime" && item.required === true), true);
 assert.equal(brickDefinition.runtimeDependencies.some((item) => item.slot === "tool:rg" && item.required === false), true);
@@ -93,6 +93,8 @@ const agentTool = new AgentTool({
 });
 assert.equal(agentTool.definition.id, "agent-tool");
 assert.equal(agentTool.definitions.some((tool) => tool.function?.name === "run_shell"), true);
+assert.equal(agentTool.definitions.some((tool) => tool.function?.name === "exec_command"), true);
+assert.equal(agentTool.definitions.some((tool) => tool.function?.name === "write_stdin"), false);
 assert.equal(agentTool.definitions.some((tool) => tool.function?.name === "workspace_search"), true);
 assert.equal(agentTool.definitions.some((tool) => tool.function?.name === "skill_find"), true);
 assert.equal(agentTool.definitions.some((tool) => tool.function?.name === "skill_activate"), true);
@@ -111,9 +113,13 @@ assert.match(playwrightShellSchema.function.description, /Product-injected Node 
 assert.match(playwrightShellSchema.function.description, /PLAYWRIGHT_BROWSERS_PATH/);
 await playwrightAwareTool.dispose();
 
-assert.deepEqual(SKILL_FIND_TOOL.schema.function.parameters.properties.action.enum, ["search", "install"]);
-assert.equal(SKILL_FIND_TOOL.schema.function.parameters.properties.package.type, "string");
-assert.equal(SKILL_FIND_TOOL.timeoutMs, 300_000);
+assert.equal(SKILL_FIND_TOOL.schema.function.description.includes("本地已注册"), true);
+assert.equal("action" in SKILL_FIND_TOOL.schema.function.parameters.properties, false);
+assert.equal("source" in SKILL_FIND_TOOL.schema.function.parameters.properties, false);
+assert.equal("package" in SKILL_FIND_TOOL.schema.function.parameters.properties, false);
+assert.equal("url" in SKILL_FIND_TOOL.schema.function.parameters.properties, false);
+assert.deepEqual(SKILL_FIND_TOOL.permissions, ["skill.index.read"]);
+assert.equal(SKILL_FIND_TOOL.timeoutMs, 5_000);
 assert.equal(EMAIL_SEND_TOOL.schema.function.parameters.required.includes("to"), true);
 assert.equal(EMAIL_SEND_TOOL.schema.function.parameters.required.includes("subject"), true);
 
@@ -127,12 +133,19 @@ assert.equal(manifest.tools.some((tool) => tool.name === "exec_command"), true);
 assert.equal(manifest.tools.some((tool) => tool.name === "write_stdin"), true);
 
 const expectedShellExecutable = process.platform === "win32" ? "powershell.exe" : "/bin/bash";
-assert.equal(RUN_SHELL_TOOL.schema.function.description.includes("Current OS:"), true);
+assert.equal(RUN_SHELL_TOOL.schema.function.description.includes("当前操作系统："), true);
 assert.equal(RUN_SHELL_TOOL.schema.function.description.includes(expectedShellExecutable), true);
 assert.equal(RUN_SHELL_TOOL.schema.function.parameters.properties.mode.description.includes(expectedShellExecutable), true);
-assert.equal(EXEC_COMMAND_TOOL.schema.function.description.includes("Current OS:"), true);
+assert.match(RUN_SHELL_TOOL.schema.function.description, /默认/);
+assert.match(RUN_SHELL_TOOL.description, /outputs\//);
+assert.match(RUN_SHELL_TOOL.description, /UTF-8/);
+assert.match(RUN_SHELL_TOOL.description, /验证目标文件存在/);
+assert.equal(EXEC_COMMAND_TOOL.schema.function.description.includes("当前操作系统："), true);
 assert.equal(EXEC_COMMAND_TOOL.schema.function.description.includes(expectedShellExecutable), true);
 assert.equal(EXEC_COMMAND_TOOL.schema.function.parameters.properties.cmd.description.includes(expectedShellExecutable), true);
+assert.match(EXEC_COMMAND_TOOL.description, /不要用它执行普通短命令/);
+assert.match(WRITE_STDIN_TOOL.description, /不是文件写入工具/);
+assert.match(WRITE_STDIN_TOOL.description, /仍在运行的 session_id/);
 
 assert.equal(validateAgentToolCall({
   schemaVersion: "agent-cli-tool.call.v1",

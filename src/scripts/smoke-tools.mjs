@@ -12,11 +12,21 @@ import path from "node:path";
 
 import { AgentTool } from "../index.mjs";
 import { resolveServiceConfig } from "../main/launch-config.mjs";
+import { appendOutput, createOutputCollector, finalizeOutput } from "../main/process-runtime.mjs";
 import { isRgAvailable } from "../main/search-runtime.mjs";
 import { createToolRegistry } from "../main/tool-registry.mjs";
 
 const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "agent-tool-smoke-"));
 await fs.writeFile(path.join(workspace, "note.txt"), "alpha\nneedle\nomega\n", "utf8");
+
+// UTF-8 多字节字符可能被子进程拆分到多个 data chunk；解码器必须保持字符完整。
+const splitUtf8Collector = createOutputCollector(64);
+const helloBytes = Buffer.from("你好", "utf8");
+appendOutput(splitUtf8Collector, helloBytes.subarray(0, 2));
+appendOutput(splitUtf8Collector, helloBytes.subarray(2));
+finalizeOutput(splitUtf8Collector);
+assert.equal(splitUtf8Collector.value, "你好");
+assert.equal(splitUtf8Collector.value.includes("\uFFFD"), false);
 
 // 临时 skill index 模拟 agent-skill 产出的合同。
 const skillRoot = path.join(workspace, "skills", "brief-writer");
@@ -62,6 +72,17 @@ const config = {
 };
 const registry = await createToolRegistry(config);
 
+const missingSession = await registry.execute({
+  schemaVersion: "agent-cli-tool.call.v1",
+  toolCallId: "call-missing-session",
+  toolName: "write_stdin",
+  arguments: { session_id: "terminal-missing", chars: "不应写入" },
+  workspace: { root: workspace }
+});
+assert.equal(missingSession.status, "failed");
+assert.equal(missingSession.error.code, "terminal_session_not_found");
+assert.match(missingSession.error.message, /未验证执行成功/);
+
 const okResult = await registry.execute({
   schemaVersion: "agent-cli-tool.call.v1",
   toolCallId: "call-node-version",
@@ -93,6 +114,7 @@ const nonzero = await registry.execute({
 });
 assert.equal(nonzero.status, "failed");
 assert.equal(nonzero.details.exitCode, 7);
+assert.match(nonzero.error.message, /未验证执行成功/);
 
 const timeout = await registry.execute({
   schemaVersion: "agent-cli-tool.call.v1",
@@ -135,6 +157,53 @@ const empty = await registry.execute({
 });
 assert.equal(empty.status, "blocked");
 
+// 模拟模型按照 run_shell 合同创建 outputs、以 UTF-8 写入，并在同一命令中验证产物。
+assert.equal(await pathExists(path.join(workspace, "outputs")), false);
+const outputWriteCommand = process.platform === "win32"
+  ? "New-Item -ItemType Directory -Force -Path outputs | Out-Null; Set-Content -LiteralPath outputs/你好.txt -Value '你好' -Encoding utf8; if (-not (Test-Path -LiteralPath outputs/你好.txt)) { exit 1 }"
+  : "mkdir -p outputs && printf '你好' > outputs/你好.txt && test -f outputs/你好.txt";
+const outputWrite = await registry.execute({
+  schemaVersion: "agent-cli-tool.call.v1",
+  toolCallId: "call-output-write",
+  toolName: "run_shell",
+  arguments: { mode: "shell", command: outputWriteCommand },
+  workspace: { root: workspace },
+  limits: { timeoutMs: 5_000, maxOutputChars: 8_000 }
+});
+assert.equal(outputWrite.status, "completed");
+assert.equal(await fs.readFile(path.join(workspace, "outputs", "你好.txt"), "utf8").then((value) => value.trim()), "你好");
+
+const outputWriteFailure = await registry.execute({
+  schemaVersion: "agent-cli-tool.call.v1",
+  toolCallId: "call-output-write-failure",
+  toolName: "run_shell",
+  arguments: {
+    mode: "process",
+    executable: process.execPath,
+    args: ["-e", "require('node:fs').writeFileSync('outputs', 'should-fail')"]
+  },
+  workspace: { root: workspace },
+  limits: { timeoutMs: 5_000, maxOutputChars: 8_000 }
+});
+assert.equal(outputWriteFailure.status, "failed");
+assert.match(outputWriteFailure.error.message, /未验证执行成功/);
+
+const splitProcessOutput = await registry.execute({
+  schemaVersion: "agent-cli-tool.call.v1",
+  toolCallId: "call-split-process-output",
+  toolName: "run_shell",
+  arguments: {
+    mode: "process",
+    executable: process.execPath,
+    args: ["-e", "const b=Buffer.from('你好','utf8'); process.stdout.write(b.subarray(0,2)); setTimeout(() => process.stdout.write(b.subarray(2)), 30)"]
+  },
+  workspace: { root: workspace },
+  limits: { timeoutMs: 5_000, maxOutputChars: 8_000 }
+});
+assert.equal(splitProcessOutput.status, "completed");
+assert.match(splitProcessOutput.details.stdout, /你好/);
+assert.equal(splitProcessOutput.details.stdout.includes("\uFFFD"), false);
+
 const terminalStart = await registry.execute({
   schemaVersion: "agent-cli-tool.call.v1",
   toolCallId: "call-terminal-start",
@@ -171,6 +240,28 @@ assert.equal(terminalPoll.details.running, false);
 assert.equal(terminalPoll.details.exitCode, 0);
 assert.match(terminalPoll.details.stdout, /terminal-later/);
 
+const splitTerminalStart = await registry.execute({
+  schemaVersion: "agent-cli-tool.call.v1",
+  toolCallId: "call-split-terminal-start",
+  toolName: "exec_command",
+  arguments: {
+    mode: "process",
+    executable: process.execPath,
+    args: ["-e", "const out=Buffer.from('你好','utf8'); const err=Buffer.from('世界','utf8'); process.stdout.write(out.subarray(0,2)); process.stderr.write(err.subarray(0,2)); setTimeout(() => { process.stdout.write(out.subarray(2)); process.stderr.write(err.subarray(2)); process.exit(0); }, 100)"],
+    yield_time_ms: 10,
+    timeoutMs: 2_000
+  },
+  workspace: { root: workspace }
+});
+assert.equal(splitTerminalStart.status, "completed");
+assert.equal(splitTerminalStart.details.running, true);
+const splitTerminalOutput = await pollTerminalUntilClosed(registry, splitTerminalStart.details.session_id, workspace);
+const splitTerminalStdout = `${splitTerminalStart.details.stdout}${splitTerminalOutput.stdout}`;
+const splitTerminalStderr = `${splitTerminalStart.details.stderr}${splitTerminalOutput.stderr}`;
+assert.match(splitTerminalStdout, /你好/);
+assert.match(splitTerminalStderr, /世界/);
+assert.equal(`${splitTerminalStdout}${splitTerminalStderr}`.includes("\uFFFD"), false);
+
 const interactiveStart = await registry.execute({
   schemaVersion: "agent-cli-tool.call.v1",
   toolCallId: "call-interactive-start",
@@ -194,7 +285,7 @@ const interactiveWrite = await registry.execute({
   toolName: "write_stdin",
   arguments: {
     session_id: interactiveStart.details.session_id,
-    chars: "hello\n",
+    chars: "你好\n",
     yield_time_ms: 100
   },
   workspace: { root: workspace },
@@ -202,7 +293,7 @@ const interactiveWrite = await registry.execute({
 });
 assert.equal(interactiveWrite.status, "completed");
 assert.equal(interactiveWrite.details.running, true);
-assert.match(interactiveWrite.details.stdout, /echo:hello/);
+assert.match(interactiveWrite.details.stdout, /echo:你好/);
 
 const interactiveEnd = await registry.execute({
   schemaVersion: "agent-cli-tool.call.v1",
@@ -246,6 +337,16 @@ const skillFind = await registry.execute({
 assert.equal(skillFind.status, "completed");
 assert.match(skillFind.content, /brief-writer/);
 
+const remoteSkillFind = await registry.execute({
+  schemaVersion: "agent-cli-tool.call.v1",
+  toolCallId: "call-skill-find-remote",
+  toolName: "skill_find",
+  arguments: { action: "install", package: "owner/repo@skill" },
+  workspace: { root: workspace }
+});
+assert.equal(remoteSkillFind.status, "blocked");
+assert.equal(remoteSkillFind.error.code, "skill_remote_operation_unsupported");
+
 const skillActivate = await registry.execute({
   schemaVersion: "agent-cli-tool.call.v1",
   toolCallId: "call-skill-activate",
@@ -257,6 +358,18 @@ assert.equal(skillActivate.status, "completed");
 assert.equal(skillActivate.details.loadedSkill.name, "brief-writer");
 assert.match(skillActivate.details.loadedSkill.content, /Keep replies short/);
 
+// 注册后 index 可能被外部进程删除；这种可恢复失败必须是结构化 tool result。
+await fs.rm(skillIndexPath);
+const staleSkillIndex = await registry.execute({
+  schemaVersion: "agent-cli-tool.call.v1",
+  toolCallId: "call-stale-skill-index",
+  toolName: "skill_find",
+  arguments: { query: "brief" },
+  workspace: { root: workspace }
+});
+assert.equal(staleSkillIndex.status, "failed");
+assert.equal(staleSkillIndex.error.code, "tool_execution_failed");
+
 const objectTool = new AgentTool({
   workspace,
   skillRuntime: {
@@ -267,6 +380,7 @@ const objectTool = new AgentTool({
 });
 assert.equal(objectTool.definitions.some((tool) => tool.function?.name === "run_shell"), true);
 assert.equal(objectTool.definitions.some((tool) => tool.function?.name === "skill_find"), true);
+assert.equal(objectTool.definitions.some((tool) => tool.function?.name === "write_stdin"), false);
 const objectShell = await objectTool.execute("run_shell", {
   mode: "process",
   executable: process.execPath,
@@ -274,6 +388,17 @@ const objectShell = await objectTool.execute("run_shell", {
 }, { workspace });
 assert.equal(objectShell.status, "completed");
 assert.match(objectShell.details.cwd, new RegExp(escapeRegExp(workspace)));
+const objectTerminal = await objectTool.execute("exec_command", {
+  mode: "process",
+  executable: process.execPath,
+  args: ["-e", "setTimeout(() => process.exit(0), 120)"],
+  yield_time_ms: 10,
+  timeoutMs: 1_000
+}, { workspace });
+assert.equal(objectTerminal.details.running, true);
+assert.equal(objectTool.definitions.some((tool) => tool.function?.name === "write_stdin"), true);
+await waitFor(() => !objectTool.definitions.some((tool) => tool.function?.name === "write_stdin"));
+assert.equal(objectTool.definitions.some((tool) => tool.function?.name === "write_stdin"), false);
 const objectSkill = await objectTool.execute("skill_activate", { skill: "brief-writer" }, { workspace });
 assert.equal(objectSkill.status, "completed");
 assert.equal(objectSkill.details.loadedSkill.name, "brief-writer");
@@ -391,6 +516,43 @@ function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+async function waitFor(predicate, timeoutMs = 2_000, intervalMs = 25) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await wait(intervalMs);
+  }
+  assert.fail(`Condition was not met within ${timeoutMs}ms.`);
+}
+
+async function pollTerminalUntilClosed(registry, sessionId, workspace, maxPolls = 20) {
+  let stdout = "";
+  let stderr = "";
+  for (let index = 0; index < maxPolls; index += 1) {
+    const result = await registry.execute({
+      schemaVersion: "agent-cli-tool.call.v1",
+      toolCallId: `call-terminal-poll-${index}`,
+      toolName: "write_stdin",
+      arguments: { session_id: sessionId, chars: "", yield_time_ms: 50 },
+      workspace: { root: workspace }
+    });
+    assert.equal(result.status, "completed");
+    stdout += result.details.stdout;
+    stderr += result.details.stderr;
+    if (!result.details.running) return { stdout, stderr };
+  }
+  assert.fail("Persistent terminal did not finish within the polling budget.");
+}
+
 function escapeRegExp(value) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+async function pathExists(targetPath) {
+  try {
+    await fs.access(targetPath);
+    return true;
+  } catch {
+    return false;
+  }
 }

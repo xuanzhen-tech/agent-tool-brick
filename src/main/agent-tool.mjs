@@ -55,7 +55,8 @@ export class AgentTool {
     return selectModelToolSchemas({
       config: this.config,
       runtimeDependencies: this.runtimeDependencies,
-      skillRuntime: this.skillRuntime
+      skillRuntime: this.skillRuntime,
+      terminalManager: this.terminalManager
     });
   }
 
@@ -146,10 +147,13 @@ function normalizeConstructorInput(input) {
   };
 }
 
-function selectModelToolSchemas({ config, runtimeDependencies, skillRuntime }) {
+function selectModelToolSchemas({ config, runtimeDependencies, skillRuntime, terminalManager }) {
   const tools = [];
   if (config.processExecEnabled !== false) {
-    tools.push(RUN_SHELL_TOOL, EXEC_COMMAND_TOOL, WRITE_STDIN_TOOL);
+    tools.push(RUN_SHELL_TOOL, EXEC_COMMAND_TOOL);
+    if (terminalManager?.stats().running > 0) {
+      tools.push(WRITE_STDIN_TOOL);
+    }
   }
   if (config.rgBin || hasRuntimeDependency(runtimeDependencies, ["tool:rg", "rg"])) {
     tools.push(WORKSPACE_SEARCH_TOOL);

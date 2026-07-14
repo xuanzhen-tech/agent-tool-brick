@@ -180,7 +180,8 @@ async function validateRuntimeArtifactIfPresent() {
 }
 
 async function assertRuntimeFilesDoNotContainSecrets(runtimeFiles) {
-  const secretPattern = /\b(?:sk|sk-ant|sk-or|ghp|github_pat|AKIA)[A-Za-z0-9_-]{20,}\b/;
+  // sk 前缀必须带连字符；否则 skill_remote_operation_unsupported 等普通标识会被误判。
+  const secretPattern = /\b(?:sk-[A-Za-z0-9_-]{20,}|ghp[A-Za-z0-9_-]{20,}|github_pat[A-Za-z0-9_-]{20,}|AKIA[A-Za-z0-9_-]{20,})\b/;
   for (const file of runtimeFiles) {
     const filePath = path.join(runtimeDir, ...String(file).split("/"));
     let content;

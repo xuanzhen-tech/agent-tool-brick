@@ -7,6 +7,7 @@
  */
 
 import { spawn } from "node:child_process";
+import { StringDecoder } from "node:string_decoder";
 
 export function runProcess({
   executable,
@@ -39,9 +40,8 @@ export function runProcess({
       return;
     }
 
-    let stdout = "";
-    let stderr = "";
-    let truncated = false;
+    const stdoutCollector = createOutputCollector(maxOutputBytes);
+    const stderrCollector = createOutputCollector(maxOutputBytes);
     let settled = false;
     let timedOut = false;
     let interrupted = false;
@@ -72,33 +72,33 @@ export function runProcess({
     }
 
     child.stdout?.on("data", (chunk) => {
-      const next = appendOutput(stdout, chunk, maxOutputBytes);
-      stdout = next.value;
-      truncated ||= next.truncated;
+      appendOutput(stdoutCollector, chunk);
     });
     child.stderr?.on("data", (chunk) => {
-      const next = appendOutput(stderr, chunk, maxOutputBytes);
-      stderr = next.value;
-      truncated ||= next.truncated;
+      appendOutput(stderrCollector, chunk);
     });
     child.on("error", (error) => {
+      finalizeOutput(stdoutCollector);
+      finalizeOutput(stderrCollector);
       settle({
         exitCode: null,
-        stdout,
-        stderr: stderr || formatError(error),
+        stdout: stdoutCollector.value,
+        stderr: stderrCollector.value || formatError(error),
         timedOut,
         interrupted,
-        truncated
+        truncated: stdoutCollector.truncated || stderrCollector.truncated
       });
     });
     child.on("close", (code) => {
+      finalizeOutput(stdoutCollector);
+      finalizeOutput(stderrCollector);
       settle({
         exitCode: code,
-        stdout,
-        stderr,
+        stdout: stdoutCollector.value,
+        stderr: stderrCollector.value,
         timedOut,
         interrupted,
-        truncated
+        truncated: stdoutCollector.truncated || stderrCollector.truncated
       });
     });
 
@@ -124,32 +124,55 @@ export function killProcessTree(child) {
   return true;
 }
 
-export function appendOutput(current, chunk, maxOutputBytes) {
-  const next = current + Buffer.from(chunk).toString("utf-8");
-  if (Buffer.byteLength(next, "utf-8") <= maxOutputBytes) {
-    return { value: next, truncated: false };
-  }
+/**
+ * 收集子进程输出并以连续 UTF-8 字节流解码。
+ *
+ * Node 的 data 事件不保证以字符边界切分；不能对每个 chunk 单独 toString，
+ * 否则中文等多字节字符跨 chunk 时会变成替换字符。
+ */
+export function createOutputCollector(maxOutputBytes) {
   return {
-    value: truncateUtf8(next, maxOutputBytes) + "\n[truncated]",
-    truncated: true
+    decoder: new StringDecoder("utf8"),
+    maxOutputBytes,
+    capturedBytes: 0,
+    value: "",
+    truncated: false,
+    finalized: false
   };
+}
+
+export function appendOutput(collector, chunk) {
+  if (collector.finalized || collector.truncated) return collector;
+  const buffer = Buffer.from(chunk);
+  const remaining = collector.maxOutputBytes - collector.capturedBytes;
+  if (remaining <= 0) {
+    markOutputTruncated(collector);
+    return collector;
+  }
+  const captured = buffer.subarray(0, remaining);
+  collector.capturedBytes += captured.byteLength;
+  collector.value += collector.decoder.write(captured);
+  if (captured.byteLength < buffer.byteLength) markOutputTruncated(collector);
+  return collector;
+}
+
+export function finalizeOutput(collector) {
+  if (collector.finalized) return collector;
+  collector.finalized = true;
+  // 截断时不 flush 可能不完整的 UTF-8 尾部，避免额外产生替换字符。
+  if (!collector.truncated) collector.value += collector.decoder.end();
+  return collector;
+}
+
+function markOutputTruncated(collector) {
+  if (collector.truncated) return;
+  collector.truncated = true;
+  collector.value += "\n[truncated]";
 }
 
 export function formatCommandPartForAudit(value) {
   if (/^[A-Za-z0-9_./:=,@+-]+$/.test(value)) return value;
   return JSON.stringify(value);
-}
-
-function truncateUtf8(value, maxBytes) {
-  let bytes = 0;
-  let output = "";
-  for (const char of value) {
-    const size = Buffer.byteLength(char, "utf-8");
-    if (bytes + size > maxBytes) break;
-    output += char;
-    bytes += size;
-  }
-  return output;
 }
 
 function formatError(error) {

@@ -78,6 +78,18 @@ try {
   assert.equal(manifest.tools.some((tool) => tool.name === "web_search"), true);
   assert.equal(manifest.tools.some((tool) => tool.name === "email_send"), true);
 
+  if (manifest.tools.some((tool) => tool.name === "workspace_search")) {
+    const missingPathSearch = await postJson(`${url}/api/tools/call`, {
+      schemaVersion: "agent-cli-tool.call.v1",
+      toolCallId: "server-search-missing-path",
+      toolName: "workspace_search",
+      arguments: { query: "needle", path: "does-not-exist" },
+      workspace: { root: workspace }
+    });
+    assert.equal(missingPathSearch.status, "failed");
+    assert.equal(missingPathSearch.error.code, "tool_execution_failed");
+  }
+
   const result = await postJson(`${url}/api/tools/call`, {
     schemaVersion: "agent-cli-tool.call.v1",
     toolCallId: "server-call",
@@ -162,6 +174,18 @@ try {
   });
   assert.equal(skillResult.status, "completed");
   assert.equal(skillResult.details.loadedSkill.name, "server-skill");
+
+  // 已注册 skill 的源文件可能被用户或同步进程删掉；服务必须返回 tool result，不能 500。
+  await fs.rm(skillFile);
+  const staleSkillResult = await postJson(`${url}/api/tools/call`, {
+    schemaVersion: "agent-cli-tool.call.v1",
+    toolCallId: "server-stale-skill-call",
+    toolName: "skill_activate",
+    arguments: { skill: "server-skill" },
+    workspace: { root: workspace }
+  });
+  assert.equal(staleSkillResult.status, "failed");
+  assert.equal(staleSkillResult.error.code, "tool_execution_failed");
 
   const webSearch = await postJson(`${url}/api/tools/call`, {
     schemaVersion: "agent-cli-tool.call.v1",
