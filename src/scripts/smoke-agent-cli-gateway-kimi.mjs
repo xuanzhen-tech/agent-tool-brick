@@ -89,6 +89,7 @@ function createPrompt() {
   return [
     "这是一次终端工具验收。请在当前 workspace 的 outputs/你好.txt 创建 UTF-8 文本文件，文件内容必须严格为：你好。",
     "outputs 目录一开始可能不存在。请自行依据工具定义选择合适工具，并在同一次命令中完成：创建目录、写入 UTF-8 内容、验证目标文件存在且内容正确。",
+    "workspace 已是 shell 的当前工作目录，不是环境变量。请使用 outputs/你好.txt 这类相对路径；不要使用 $env:WORKSPACE、%WORKSPACE%、$WORKSPACE、\\outputs 或 C:\\outputs。",
     "不要启动持续服务。只有工具结果明确成功后，才回答：文件已生成。"
   ].join("\n");
 }
@@ -132,6 +133,9 @@ async function assertLocalResult({ workspace, events, observedDefinitions }) {
   assert.equal(terminalToolStarts[0].toolName, "run_shell", "Kimi must use run_shell for this one-off file write.");
   assert.equal(terminalToolStarts.some((event) => event.toolName === "write_stdin"), false, "Kimi must not use write_stdin without a terminal session.");
   assert.equal(events.some((event) => event.type === "tool_end" && event.toolName === "run_shell" && event.status === "completed"), true, "run_shell must complete successfully.");
+  const terminalCommands = terminalToolStarts.map((event) => JSON.stringify(event.detail ?? ""));
+  assert.equal(terminalCommands.some((command) => /\$env:WORKSPACE|%WORKSPACE%|\$WORKSPACE/i.test(command)), false, "Kimi must not treat workspace as an environment variable.");
+  assert.equal(terminalCommands.some((command) => /(?:C:)?\\outputs(?:\\|\")/i.test(command)), false, "Kimi must not write to a drive-root outputs directory.");
 
   const filePath = path.join(workspace, "outputs", "你好.txt");
   const content = await fs.readFile(filePath, "utf8");

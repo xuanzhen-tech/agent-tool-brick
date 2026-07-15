@@ -27,7 +27,7 @@ import { createToolResult } from "../main/tool-contract.mjs";
 
 assert.equal(brickDefinition.id, "agent-tool");
 assert.equal(brickDefinition.kind, "tool");
-assert.equal(brickDefinition.version, "0.2.7");
+assert.equal(brickDefinition.version, "0.2.8");
 assert.equal(validateBrickDefinition(brickDefinition).ok, true);
 assert.equal(brickDefinition.runtimeDependencies.some((item) => item.type === "node-runtime" && item.required === true), true);
 assert.equal(brickDefinition.runtimeDependencies.some((item) => item.slot === "tool:rg" && item.required === false), true);
@@ -131,6 +131,9 @@ assert.equal(manifest.tools.some((tool) => tool.name === "write_stdin"), true);
 const expectedShellExecutable = process.platform === "win32" ? "powershell.exe" : "/bin/bash";
 assert.equal(RUN_SHELL_TOOL.schema.function.description.includes("当前操作系统："), true);
 assert.equal(RUN_SHELL_TOOL.schema.function.description.includes(expectedShellExecutable), true);
+assert.equal(RUN_SHELL_TOOL.schema.function.description.includes("workspace 已作为子进程 cwd 设置，但不是环境变量"), true);
+assert.equal(RUN_SHELL_TOOL.schema.function.description.includes("$env:WORKSPACE、%WORKSPACE% 或 $WORKSPACE"), true);
+assert.equal(EXEC_COMMAND_TOOL.schema.function.description.includes("outputs/about.txt"), true);
 assert.equal(RUN_SHELL_TOOL.schema.function.parameters.properties.mode.description.includes(expectedShellExecutable), true);
 assert.match(RUN_SHELL_TOOL.schema.function.description, /默认/);
 assert.match(RUN_SHELL_TOOL.description, /outputs\//);

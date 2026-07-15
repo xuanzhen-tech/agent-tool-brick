@@ -13,6 +13,14 @@ const SHELL_CONTEXT_DESCRIPTION = [
   SHELL_CONTEXT.syntaxHint
 ].join(" ");
 
+// workspace 由调用方作为子进程 cwd 传入，而非环境变量。将这条约束写入每个
+// 终端工具 schema，避免模型把空的 WORKSPACE 环境变量解析成磁盘根目录路径。
+const WORKSPACE_PATH_CONTRACT = [
+  "当前 workspace 已作为子进程 cwd 设置，但不是环境变量。",
+  "普通工作区文件操作优先使用相对路径，例如 outputs/about.txt；不要假设 $env:WORKSPACE、%WORKSPACE% 或 $WORKSPACE 存在。",
+  "不要把 \\outputs 或 C:\\outputs 当作默认输出位置；需要绝对路径时使用调用方提供的 workspace 完整路径。"
+].join(" ");
+
 function createShellContext(platform) {
   if (platform === "win32") {
     return {
@@ -37,6 +45,7 @@ export const RUN_SHELL_TOOL = {
   description: [
     "默认且优先使用的一次性终端工具：在当前 workspace 执行应在本次调用内结束的命令，带有超时、取消和输出大小限制。",
     SHELL_CONTEXT_DESCRIPTION,
+    WORKSPACE_PATH_CONTRACT,
     "普通文件读写、Python、Node、git、npm、npx 和一次性脚本都优先使用本工具；Python、Node 等优先使用 mode='process'，这样 executable、args 和 stdin 不需要 shell 转义。",
     `只有必须使用 ${SHELL_CONTEXT.syntaxLabel} 的管道、变量、重定向或条件语句时才使用 mode='shell'。`,
     "生成正式交付文件时必须写入 outputs/：在同一命令中创建缺失目录、以 UTF-8 写入、并验证目标文件存在。命令失败、超时或未验证成功时，不得宣称任务已完成。",
@@ -48,7 +57,8 @@ export const RUN_SHELL_TOOL = {
       name: "run_shell",
       description: [
         "默认的一次性终端工具。用于普通文件读写、脚本、Python、Node、git、npm 和短时命令；不用于持续运行的服务或交互式终端。",
-        SHELL_CONTEXT_DESCRIPTION
+        SHELL_CONTEXT_DESCRIPTION,
+        WORKSPACE_PATH_CONTRACT
       ].join(" "),
       parameters: {
         type: "object",
@@ -60,7 +70,7 @@ export const RUN_SHELL_TOOL = {
           },
           command: {
             type: "string",
-            description: `mode=shell 的命令。${SHELL_CONTEXT.osLabel} 上必须使用 ${SHELL_CONTEXT.syntaxLabel} 语法。正式输出需在命令内创建 outputs/、使用 UTF-8，并验证文件存在。`
+            description: `mode=shell 的命令。${SHELL_CONTEXT.osLabel} 上必须使用 ${SHELL_CONTEXT.syntaxLabel} 语法。${WORKSPACE_PATH_CONTRACT} 正式输出需在命令内创建 outputs/、使用 UTF-8，并验证文件存在。`
           },
           executable: {
             type: "string",
@@ -94,6 +104,7 @@ export const EXEC_COMMAND_TOOL = {
   description: [
     "仅用于持续运行的终端进程：启动命令后，如果它仍在运行，会快速返回 session_id。",
     SHELL_CONTEXT_DESCRIPTION,
+    WORKSPACE_PATH_CONTRACT,
     "只适用于 dev server、watcher、REPL、持续日志或后续确实需要 stdin/轮询输出的进程。不要用它执行普通短命令、一次性脚本或普通文件写入；这些任务使用 run_shell。",
     "需要 shell 语法时传 cmd；直接执行进程时传 executable 加 args。"
   ].join(" "),
@@ -103,7 +114,8 @@ export const EXEC_COMMAND_TOOL = {
       name: "exec_command",
       description: [
         "仅启动持续终端进程；仍在运行时返回 session_id，后续才可用 write_stdin 写入或轮询。普通命令和文件操作使用 run_shell。",
-        SHELL_CONTEXT_DESCRIPTION
+        SHELL_CONTEXT_DESCRIPTION,
+        WORKSPACE_PATH_CONTRACT
       ].join(" "),
       parameters: {
         type: "object",
@@ -128,7 +140,7 @@ export const EXEC_COMMAND_TOOL = {
           },
           workdir: {
             type: "string",
-            description: "相对 workspace 的工作目录，默认 workspace 根目录。"
+            description: "相对 workspace 的工作目录，默认 workspace 根目录。workspace 是 cwd 而非环境变量；不要填写 $env:WORKSPACE、%WORKSPACE% 或 $WORKSPACE。"
           },
           yield_time_ms: {
             type: "integer",
