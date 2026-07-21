@@ -18,7 +18,7 @@
 - 一次性命令工具 `run_shell`
 - 持续终端会话工具 `exec_command` 和 `write_stdin`
 - 通过注入的 `rg` runtime 暴露可选 `workspace_search`
-- 通过注入的 `AgentSkill` 对象暴露可选 `skill_find` 和 `skill_activate`
+- 通过注入的 `AgentSkill` 对象暴露可选 `skill_find`、`skill_activate` 和 `skill_resource`
 - 通过服务端 Tool Gateway 暴露 `web_search` 和 `web_fetch`
 - 通过服务端 Tool Gateway 暴露 `email_send`
 - 通过注入的 `python-runtime` 支持 Python-backed 本地工具执行
@@ -85,7 +85,7 @@ const agent = new AgentCli({
 });
 ```
 
-`agentTool.definitions` 返回面向模型的 OpenAI-compatible tool schemas。`agentTool.execute(name, args, context)` 执行指定工具，并把持续终端会话保存在当前 `AgentTool` 实例内。注入 `AgentSkill` 对象后，`skill_find` 和 `skill_activate` 会暴露给模型，并委托该对象完成本地 skill 查找、远端候选搜索、安装和激活。
+`agentTool.definitions` 返回面向模型的 OpenAI-compatible tool schemas。`agentTool.execute(name, args, context)` 执行指定工具，并把持续终端会话保存在当前 `AgentTool` 实例内。注入完整 `AgentSkill` 对象后，`skill_find`、`skill_activate` 和 `skill_resource` 会暴露给模型；它们分别委托该对象完成本地/远端 skill 查找、激活，以及 skill 包资源的受控访问。
 
 `web_search`、`web_fetch` 和 `email_send` 默认通过固定 Server Tool Gateway 转发。Tavily key、SMTP host、SMTP username/password 都只配置在服务器上，产品仓库和 `AgentTool` 构造函数不接收这些密钥。`email_send` 的附件仍由本地 `AgentTool` 读取 workspace 内文件并做大小/路径校验，然后把文件内容随请求交给服务器发送。
 
@@ -106,6 +106,33 @@ await agentTool.execute("skill_find", {
 ```
 
 搜索结果里的 `skills` 是已安装 skill，`candidates` 是远端候选。完整 `SKILL.md` 内容只会在后续 `skill_activate` 中通过 `loadedSkill` payload 返回。
+
+## Skill 资源工具
+
+`skill_activate` 只会加载 `SKILL.md`，同时返回 `references/` 与 `assets/` 的轻量清单；
+它不会把 reference 全文混进普通工具结果，也不会复制 asset。模型需要资源时使用唯一的
+`skill_resource` 工具：
+
+```js
+await agentTool.execute("skill_resource", {
+  action: "read_reference",
+  skill: "brief-writer",
+  path: "references/usage.md"
+}, { workspace });
+
+await agentTool.execute("skill_resource", {
+  action: "copy_asset",
+  skill: "brief-writer",
+  path: "assets/template.docx"
+}, { workspace });
+```
+
+- `read_reference` 只接受 `references/...` 下的 UTF-8 文本，返回
+  `loadedSkillReference`。`AgentCli` 会将其升级为专门上下文块并跨轮保留。
+- `copy_asset` 只接受 `assets/...`。模型不能指定目标路径，文件固定物化到
+  `workspace/temp/skill-assets/<skill>/<contentHash>/<fileName>`，返回 workspace 相对路径。
+- `scripts/` 和任意工作区路径都不能通过此工具读取或执行；需要通用底层操作时才由
+  `run_shell` 作为保底工具处理。
 
 产品主路径只需要传 `workspace`、`runtimeDependencies` 和 `skillRuntime`。其中 `runtimeDependencies` 是 Node、Python、rg、产品 Node 包、Playwright browsers 等运行时注入的唯一入口；`skillRuntime` 是 skill 查找和激活的唯一入口。对象模式不再接收 `rgBin`、`nodeBin`、`pythonBin`、`skillIndexPath`、web provider、shell 限制或 terminal 限制等散参。
 
@@ -159,7 +186,7 @@ AGENT_TOOL_RESULT_COMPRESSION
 
 `PLAYWRIGHT_BROWSERS_PATH` 来自可选的 `playwright-browsers` runtime dependency。配置后，Node 子进程可以使用该路径下的 Chromium 缓存；Playwright JS library 本身仍由产品仓库依赖提供。
 
-`skill_find` 和 `skill_activate` 只由注入的 `AgentSkill` 实例提供。独立执行 `agent-tool serve` 时没有该对象，因此不会暴露这两个工具；产品需要 HTTP transport 时应通过 `agentTool.createServer()` 启动，以复用同一个 `AgentSkill` 和终端会话。
+`skill_find`、`skill_activate` 和 `skill_resource` 只由注入的 `AgentSkill` 实例提供。独立执行 `agent-tool serve` 时没有该对象，因此不会暴露这些工具；产品需要 HTTP transport 时应通过 `agentTool.createServer()` 启动，以复用同一个 `AgentSkill` 和终端会话。
 
 `AGENT_TOOL_GATEWAY_BASE_URL` 是可选覆盖项。默认指向固定 Server Tool Gateway；Tavily 和 SMTP 配置必须放在服务器环境变量中，不放在产品仓库或客户端环境变量中。
 
@@ -181,7 +208,7 @@ npm run smoke:five-brick-kimi
 Remove-Item Env:AGENT_CLI_KIMI_API_KEY -ErrorAction SilentlyContinue
 ```
 
-该 smoke 会组合 `agent-cli`、`agent-tool`、`agent-skill`、`node-runtime` 和 `python-runtime`，验证 skill prompt、`skill_find`、`skill_activate`、`loadedSkill`、`run_shell` 和注入 Python runtime 的完整链路。
+该 smoke 会组合 `agent-cli`、`agent-tool`、`agent-skill`、`node-runtime` 和 `python-runtime`，验证 skill prompt、`skill_find`、`skill_activate`、`skill_resource`、`loadedSkill`、`run_shell` 和注入 Python runtime 的完整链路。
 
 ## 本地验证
 

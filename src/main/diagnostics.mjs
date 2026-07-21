@@ -108,17 +108,20 @@ async function createPythonRuntimeCheck(config) {
 
 function createSkillRuntimeCheck(skillRuntime) {
   if (skillRuntime && typeof skillRuntime.find === "function" && typeof skillRuntime.activate === "function") {
+    const supportsResources = typeof skillRuntime.readReference === "function" && typeof skillRuntime.resolveAsset === "function";
     return {
       id: "tool.skill_runtime",
       status: "pass",
-      summary: "AgentSkill runtime is injected; skill_find and skill_activate are exposed.",
-      detail: `${skillRuntime.definitions?.length ?? 0} cached skills`
+      summary: supportsResources
+        ? "AgentSkill runtime is injected; skill_find, skill_activate, and skill_resource are exposed."
+        : "AgentSkill runtime is injected; skill_find and skill_activate are exposed.",
+      detail: `${skillRuntime.definitions?.length ?? 0} cached skills${supportsResources ? "; controlled skill resources enabled" : "; skill resources unavailable"}`
     };
   }
   return {
     id: "tool.skill_runtime",
     status: "warn",
-    summary: "AgentSkill runtime is not injected; skill_find and skill_activate will not be exposed.",
+    summary: "AgentSkill runtime is not injected; skill_find, skill_activate, and skill_resource will not be exposed.",
     detail: "Inject AgentSkill when creating AgentTool or the HTTP service."
   };
 }

@@ -16,7 +16,7 @@ import { fileURLToPath } from "node:url";
 
 const BRICK_ID = "agent-tool";
 const BRICK_NAME = "Agent Tool";
-const BRICK_VERSION = "0.2.8";
+const BRICK_VERSION = "0.3.0";
 const BRICK_KIND = "tool";
 
 const toolServiceCapability = createBrickCapability({
@@ -54,9 +54,9 @@ const workspaceSearchCapability = createBrickCapability({
 
 const skillToolsCapability = createBrickCapability({
   id: "agent-tool.skill-tools",
-  name: "Skill Discovery And Activation Tools",
+  name: "Skill Discovery, Activation And Resource Tools",
   type: "tool",
-  description: "Finds skills and returns loadedSkill activation payloads through an injected AgentSkill object.",
+  description: "Finds skills, returns loadedSkill activation payloads, and accesses packaged references/assets through an injected AgentSkill object.",
   requires: ["node-runtime", "agent-skill"],
   optional: true
 });

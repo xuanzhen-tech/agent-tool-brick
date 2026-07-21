@@ -22,12 +22,19 @@ import {
   validateAgentToolManifest,
   validateAgentToolResult
 } from "../index.mjs";
-import { EMAIL_SEND_TOOL, EXEC_COMMAND_TOOL, RUN_SHELL_TOOL, SKILL_FIND_TOOL, WRITE_STDIN_TOOL } from "../main/tool-definitions.mjs";
+import {
+  EMAIL_SEND_TOOL,
+  EXEC_COMMAND_TOOL,
+  RUN_SHELL_TOOL,
+  SKILL_FIND_TOOL,
+  SKILL_RESOURCE_TOOL,
+  WRITE_STDIN_TOOL
+} from "../main/tool-definitions.mjs";
 import { createToolResult } from "../main/tool-contract.mjs";
 
 assert.equal(brickDefinition.id, "agent-tool");
 assert.equal(brickDefinition.kind, "tool");
-assert.equal(brickDefinition.version, "0.2.8");
+assert.equal(brickDefinition.version, "0.3.0");
 assert.equal(validateBrickDefinition(brickDefinition).ok, true);
 assert.equal(brickDefinition.runtimeDependencies.some((item) => item.type === "node-runtime" && item.required === true), true);
 assert.equal(brickDefinition.runtimeDependencies.some((item) => item.slot === "tool:rg" && item.required === false), true);
@@ -98,6 +105,7 @@ assert.equal(agentTool.definitions.some((tool) => tool.function?.name === "write
 assert.equal(agentTool.definitions.some((tool) => tool.function?.name === "workspace_search"), true);
 assert.equal(agentTool.definitions.some((tool) => tool.function?.name === "skill_find"), true);
 assert.equal(agentTool.definitions.some((tool) => tool.function?.name === "skill_activate"), true);
+assert.equal(agentTool.definitions.some((tool) => tool.function?.name === "skill_resource"), false);
 assert.equal((await agentTool.execute("skill_find", JSON.stringify({ query: "demo" }))).details.skills[0].name, "demo");
 await agentTool.dispose();
 
@@ -116,6 +124,10 @@ await playwrightAwareTool.dispose();
 assert.deepEqual(SKILL_FIND_TOOL.schema.function.parameters.properties.action.enum, ["search", "install"]);
 assert.equal(SKILL_FIND_TOOL.schema.function.parameters.properties.package.type, "string");
 assert.equal(SKILL_FIND_TOOL.timeoutMs, 300_000);
+assert.deepEqual(SKILL_RESOURCE_TOOL.schema.function.parameters.required, ["action", "skill", "path"]);
+assert.equal(SKILL_RESOURCE_TOOL.schema.function.parameters.additionalProperties, false);
+assert.deepEqual(SKILL_RESOURCE_TOOL.schema.function.parameters.properties.action.enum, ["read_reference", "copy_asset"]);
+assert.equal("destination" in SKILL_RESOURCE_TOOL.schema.function.parameters.properties, false);
 assert.equal(EMAIL_SEND_TOOL.schema.function.parameters.required.includes("to"), true);
 assert.equal(EMAIL_SEND_TOOL.schema.function.parameters.required.includes("subject"), true);
 
@@ -139,6 +151,7 @@ assert.match(RUN_SHELL_TOOL.schema.function.description, /默认/);
 assert.match(RUN_SHELL_TOOL.description, /outputs\//);
 assert.match(RUN_SHELL_TOOL.description, /UTF-8/);
 assert.match(RUN_SHELL_TOOL.description, /验证目标文件存在/);
+assert.match(RUN_SHELL_TOOL.description, /不得擅自添加标点/);
 assert.equal(EXEC_COMMAND_TOOL.schema.function.description.includes("当前操作系统："), true);
 assert.equal(EXEC_COMMAND_TOOL.schema.function.description.includes(expectedShellExecutable), true);
 assert.equal(EXEC_COMMAND_TOOL.schema.function.parameters.properties.cmd.description.includes(expectedShellExecutable), true);
@@ -181,6 +194,30 @@ const compressed = compressToolExecutionResult({
 assert.equal(compressed.changed, true);
 assert.match(compressed.result.content, new RegExp(TOOL_RESULT_COMPRESSION_MARKER.replaceAll("[", "\\[").replaceAll("]", "\\]")));
 assert.equal(compressed.result.details.__agentToolCompression.policy, "run_shell");
+
+// skill 正文由 AgentCli 提升为跨轮专门上下文。即便正文已经超过普通工具结果
+// 的压缩阈值，HTTP 工具层也必须完整保留，不能让 CLI 只拿到 head/tail 摘要。
+const referenceContent = "reference-line\n".repeat(10_000);
+const promotedReference = compressToolExecutionResult({
+  toolName: "skill_resource",
+  toolCallId: "call-skill-reference",
+  result: {
+    status: "completed",
+    content: JSON.stringify({ status: "completed" }),
+    details: {
+      loadedSkillReference: {
+        skillName: "demo-skill",
+        path: "references/large.md",
+        content: referenceContent,
+        contentHash: "test-reference-hash",
+        bytes: Buffer.byteLength(referenceContent, "utf8")
+      }
+    }
+  }
+});
+assert.equal(promotedReference.changed, false);
+assert.equal(promotedReference.metadata.reason, "promoted_skill_context");
+assert.equal(promotedReference.result.details.loadedSkillReference.content, referenceContent);
 
 const disabled = compressToolExecutionResult({
   toolName: "run_shell",

@@ -18,6 +18,7 @@ import {
   RUN_SHELL_TOOL,
   SKILL_ACTIVATE_TOOL,
   SKILL_FIND_TOOL,
+  SKILL_RESOURCE_TOOL,
   WEB_FETCH_TOOL,
   WEB_SEARCH_TOOL,
   WRITE_STDIN_TOOL,
@@ -25,6 +26,7 @@ import {
 } from "./tool-definitions.mjs";
 import { createToolRegistry } from "./tool-registry.mjs";
 import { isEmailProviderAvailable } from "./email-runtime.mjs";
+import { executeSkillResource } from "./skill-resource-runtime.mjs";
 import { isWebProviderAvailable } from "./web-runtime.mjs";
 
 const TOOL_CALL_SCHEMA_VERSION = "agent-cli-tool.call.v1";
@@ -65,7 +67,7 @@ export class AgentTool {
     if (!toolName) return blockedResult("tool_name_required", "tool name is required");
 
     const parsedArgs = parseToolArguments(args);
-    if (toolName === SKILL_FIND_TOOL.name || toolName === SKILL_ACTIVATE_TOOL.name) {
+    if ([SKILL_FIND_TOOL.name, SKILL_ACTIVATE_TOOL.name, SKILL_RESOURCE_TOOL.name].includes(toolName)) {
       return await this.executeSkillTool(toolName, parsedArgs, context);
     }
 
@@ -113,7 +115,12 @@ export class AgentTool {
 
   async getRegistry() {
     if (!this.registryPromise) {
-      this.registryPromise = createToolRegistry(this.config, { terminalManager: this.terminalManager });
+      // 直接 SDK 调用与 HTTP transport 必须使用同一份 AgentSkill 能力，
+      // 否则 registry 路径会丢失 skill_resource 等注入式工具。
+      this.registryPromise = createToolRegistry(this.config, {
+        terminalManager: this.terminalManager,
+        skillRuntime: this.skillRuntime
+      });
     }
     return await this.registryPromise;
   }
@@ -125,6 +132,16 @@ export class AgentTool {
     try {
       if (toolName === SKILL_FIND_TOOL.name) {
         const result = await this.skillRuntime.find(args, context);
+        return completedResult(toolName, context, result);
+      }
+      if (toolName === SKILL_RESOURCE_TOOL.name) {
+        if (!hasSkillResourceApi(this.skillRuntime)) {
+          return blockedResult("skill.resource_unavailable", "The injected AgentSkill runtime does not support skill resources.");
+        }
+        const result = await executeSkillResource(this.skillRuntime, args, {
+          ...context,
+          workspace: context.workspace ?? context.workingDirectory ?? this.workspace ?? this.config.workspaceRoot
+        });
         return completedResult(toolName, context, result);
       }
       const skillName = args.skill ?? args.name ?? args.id;
@@ -160,6 +177,7 @@ function selectModelToolSchemas({ config, runtimeDependencies, skillRuntime, ter
   }
   if (skillRuntime) {
     tools.push(SKILL_FIND_TOOL, SKILL_ACTIVATE_TOOL);
+    if (hasSkillResourceApi(skillRuntime)) tools.push(SKILL_RESOURCE_TOOL);
   }
   if (isWebProviderAvailable(config).available) {
     tools.push(WEB_SEARCH_TOOL, WEB_FETCH_TOOL);
@@ -169,6 +187,14 @@ function selectModelToolSchemas({ config, runtimeDependencies, skillRuntime, ter
   }
   // AgentCli 需要的是 OpenAI-compatible tool schema，而不是带权限字段的 manifest item。
   return tools.map((tool) => decorateToolSchemaForRuntime(tool.schema, config));
+}
+
+function hasSkillResourceApi(skillRuntime) {
+  return Boolean(
+    skillRuntime &&
+    typeof skillRuntime.readReference === "function" &&
+    typeof skillRuntime.resolveAsset === "function"
+  );
 }
 
 function decorateToolSchemaForRuntime(schema, config = {}) {

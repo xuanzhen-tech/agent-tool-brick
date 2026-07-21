@@ -9,6 +9,7 @@
 
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -31,7 +32,7 @@ try {
   console.log(`[smoke-five-brick-integration] mode ${realKimi ? "real-kimi" : "mock"}`);
   const workspace = path.join(tempRoot, "workspace");
   const managedRoot = path.join(tempRoot, "managed-skills");
-  await createFixtureSkill(managedRoot);
+  const skillFixture = await createFixtureSkill(managedRoot);
 
   console.log("[smoke-five-brick-integration] expand runtime artifacts");
   const { nodeBin, pythonBin } = await installRuntimeArtifacts(tempRoot);
@@ -50,6 +51,7 @@ try {
   });
   assert.equal(agentTool.definitions.some((tool) => tool.function?.name === "skill_find"), true);
   assert.equal(agentTool.definitions.some((tool) => tool.function?.name === "skill_activate"), true);
+  assert.equal(agentTool.definitions.some((tool) => tool.function?.name === "skill_resource"), true);
   assert.equal(agentTool.definitions.some((tool) => tool.function?.name === "run_shell"), true);
 
   const toolDiagnostics = await agentTool.diagnostics({ workspace });
@@ -65,14 +67,14 @@ try {
     toolRuntime: agentTool,
     skillRuntime: agentSkill,
     threadStore,
-    ...(realKimi ? {} : { fetchImpl: createMockFetch(payloads) })
+    ...(realKimi ? {} : { fetchImpl: createMockFetch(payloads, skillFixture) })
   });
 
   const cliDiagnostics = await agent.diagnostics();
   assert.equal(cliDiagnostics.checks.find((check) => check.id === "node.runtime")?.status, "pass");
 
-  const events = await collectChatEvents(agent, createPrompt(), realKimi ? 240_000 : 120_000);
-  assertFiveBrickEvents(events, payloads);
+  const events = await collectChatEvents(agent, createPrompt(realKimi), realKimi ? 240_000 : 120_000);
+  await assertFiveBrickEvents({ events, payloads, workspace, skillFixture, expectSkillResources: !realKimi });
 
   agent.dispose();
   await agentTool.dispose();
@@ -126,6 +128,17 @@ async function createFixtureSkill(managedRoot) {
     "When this skill is active, verify Python dependencies before reporting results.",
     "Use concise evidence from command output."
   ].join("\n"), "utf8");
+  const referenceContent = "# Python Reporter Reference\n\nUse the packaged report template before writing the final report.\n";
+  await fs.mkdir(path.join(skillDir, "references"), { recursive: true });
+  await fs.writeFile(path.join(skillDir, "references", "report-format.md"), referenceContent, "utf8");
+  const assetContent = "title,summary\n";
+  await fs.mkdir(path.join(skillDir, "assets"), { recursive: true });
+  await fs.writeFile(path.join(skillDir, "assets", "report-template.csv"), assetContent, "utf8");
+  return {
+    referenceContent,
+    assetContent,
+    assetHash: crypto.createHash("sha256").update(assetContent).digest("hex")
+  };
 }
 
 async function installRuntimeArtifacts(tempRoot) {
@@ -179,21 +192,50 @@ function createAgentEnv() {
   };
 }
 
-function createPrompt() {
+function createPrompt(realProvider) {
   return [
     "This is an acceptance smoke test for a modular agent product.",
     "You must use tools in this order:",
     "1. Call skill_find with query \"python reporter\".",
     "2. Call skill_activate for skill \"python-reporter\".",
-    "3. Call run_shell in process mode with executable \"python\" and args:",
+    ...(realProvider ? [] : [
+      "3. Call skill_resource read_reference for references/report-format.md.",
+      "4. Call skill_resource copy_asset for assets/report-template.csv."
+    ]),
+    realProvider ? "3. Call run_shell in process mode with executable \"python\" and args:" : "5. Call run_shell in process mode with executable \"python\" and args:",
     "   [\"-s\", \"-c\", \"import importlib; [importlib.import_module(name) for name in ['openpyxl','pandas','docx','fitz']]; print('FIVE_BRICK_PYTHON_OK')\"]",
     "After the Python command succeeds, answer exactly: FIVE_BRICK_DONE"
   ].join("\n");
 }
 
 // mock 只替代模型 provider；五个 brick 的对象组合和 runtime artifact 消费仍然是真实路径。
-function createMockFetch(payloads) {
+function createMockFetch(payloads, skillFixture) {
   let requestIndex = 0;
+  const pythonCode = [
+    "import importlib, pathlib",
+    "[importlib.import_module(name) for name in ['openpyxl','pandas','docx','fitz']]",
+    `asset = pathlib.Path('temp/skill-assets/python-reporter/${skillFixture.assetHash}/report-template.csv')`,
+    "assert asset.exists(), asset",
+    "print('FIVE_BRICK_PYTHON_OK')"
+  ].join("; ");
+  const pythonToolCallChunk = JSON.stringify({
+    choices: [{
+      delta: {
+        tool_calls: [{
+          index: 0,
+          id: "call-python",
+          function: {
+            name: "run_shell",
+            arguments: JSON.stringify({
+              mode: "process",
+              executable: "python",
+              args: ["-s", "-c", pythonCode]
+            })
+          }
+        }]
+      }
+    }]
+  });
   const responses = [
     [
       `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-find","function":{"name":"skill_find","arguments":"{\\"query\\":\\"python reporter\\"}"}}]}}]}\n\n`,
@@ -204,7 +246,15 @@ function createMockFetch(payloads) {
       "data: [DONE]\n\n"
     ],
     [
-      `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-python","function":{"name":"run_shell","arguments":"{\\"mode\\":\\"process\\",\\"executable\\":\\"python\\",\\"args\\":[\\"-s\\",\\"-c\\",\\"import importlib; [importlib.import_module(name) for name in ['openpyxl','pandas','docx','fitz']]; print('FIVE_BRICK_PYTHON_OK')\\"]}"}}]}}]}\n\n`,
+      `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-reference","function":{"name":"skill_resource","arguments":"{\\"action\\":\\"read_reference\\",\\"skill\\":\\"python-reporter\\",\\"path\\":\\"references/report-format.md\\"}"}}]}}]}\n\n`,
+      "data: [DONE]\n\n"
+    ],
+    [
+      `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-asset","function":{"name":"skill_resource","arguments":"{\\"action\\":\\"copy_asset\\",\\"skill\\":\\"python-reporter\\",\\"path\\":\\"assets/report-template.csv\\"}"}}]}}]}\n\n`,
+      "data: [DONE]\n\n"
+    ],
+    [
+      `data: ${pythonToolCallChunk}\n\n`,
       "data: [DONE]\n\n"
     ],
     [
@@ -213,7 +263,12 @@ function createMockFetch(payloads) {
     ]
   ];
 
-  return async (_url, init) => {
+  return async (url, init) => {
+    // AgentCli 会异步镜像 lifecycle event。它不是 LLM 请求，不能混进后续
+    // 对模型 payload 的断言，也不应收到伪造的 SSE 响应。
+    if (String(url).endsWith("/events")) {
+      return new Response(JSON.stringify({ ok: true }), { status: 202 });
+    }
     payloads.push(JSON.parse(init.body));
     const chunks = responses[requestIndex++];
     return new Response(new ReadableStream({
@@ -242,7 +297,7 @@ async function collectChatEvents(agent, message, timeoutMs) {
   return await Promise.race([collect, timeout]);
 }
 
-function assertFiveBrickEvents(events, payloads) {
+async function assertFiveBrickEvents({ events, payloads, workspace, skillFixture, expectSkillResources }) {
   if (!realKimi) {
     assert.equal(payloads[0].messages.some((message) => {
       return message.role === "system" && message.content.includes("python-reporter");
@@ -252,9 +307,18 @@ function assertFiveBrickEvents(events, payloads) {
 
   assert.equal(events.some((event) => event.type === "tool_end" && event.toolName === "skill_find"), true);
   assert.equal(events.some((event) => event.type === "loaded_skill" && event.skillName === "python-reporter"), true);
-  assert.equal(events.some((event) => {
-    return event.type === "tool_end" && event.toolName === "run_shell" && /FIVE_BRICK_PYTHON_OK/.test(event.result ?? "");
-  }), true);
+  if (expectSkillResources) {
+    assert.equal(events.some((event) => event.type === "loaded_skill_reference" && event.resourcePath === "references/report-format.md"), true);
+    assert.equal(events.some((event) => event.type === "tool_end" && event.toolName === "skill_resource"), true);
+    assert.equal(payloads[3].messages.some((message) => {
+      return message.role === "system" && message.content.includes("<loaded_skill_reference skill=\"python-reporter\" path=\"references/report-format.md\"") && message.content.includes(skillFixture.referenceContent.trim());
+    }), true);
+    const copiedAsset = path.join(workspace, "temp", "skill-assets", "python-reporter", skillFixture.assetHash, "report-template.csv");
+    assert.equal(await fs.readFile(copiedAsset, "utf8"), skillFixture.assetContent);
+  }
+  const pythonToolEnd = events.find((event) => event.type === "tool_end" && event.toolName === "run_shell");
+  assert.ok(pythonToolEnd, `run_shell event missing: ${JSON.stringify(events)}`);
+  assert.match(pythonToolEnd.result ?? "", /FIVE_BRICK_PYTHON_OK/);
 
   const finalText = events
     .filter((event) => event.type === "assistant_delta")

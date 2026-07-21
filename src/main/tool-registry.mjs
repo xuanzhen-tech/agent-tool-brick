@@ -13,6 +13,7 @@ import {
   RUN_SHELL_TOOL,
   SKILL_ACTIVATE_TOOL,
   SKILL_FIND_TOOL,
+  SKILL_RESOURCE_TOOL,
   WEB_FETCH_TOOL,
   WEB_SEARCH_TOOL,
   WRITE_STDIN_TOOL,
@@ -21,6 +22,7 @@ import {
 import { executeEmailSend, isEmailProviderAvailable } from "./email-runtime.mjs";
 import { executeRunShell } from "./shell-runtime.mjs";
 import { executeWorkspaceSearch, isRgAvailable } from "./search-runtime.mjs";
+import { executeSkillResource } from "./skill-resource-runtime.mjs";
 import { createTerminalSessionManager } from "./terminal-runtime.mjs";
 import { compressToolExecutionResult } from "./tool-result-compression.mjs";
 import { executeWebFetch, executeWebSearch, isWebProviderAvailable } from "./web-runtime.mjs";
@@ -52,6 +54,10 @@ export async function createToolRegistry(config, options = {}) {
     tools.push(SKILL_FIND_TOOL, SKILL_ACTIVATE_TOOL);
     executors.set(SKILL_FIND_TOOL.name, (call, _currentConfig, signal) => executeInjectedSkillFind(call, skillRuntime, signal));
     executors.set(SKILL_ACTIVATE_TOOL.name, (call, _currentConfig, signal) => executeInjectedSkillActivate(call, skillRuntime, signal));
+    if (hasSkillResourceApi(skillRuntime)) {
+      tools.push(SKILL_RESOURCE_TOOL);
+      executors.set(SKILL_RESOURCE_TOOL.name, (call, _currentConfig, signal) => executeInjectedSkillResource(call, skillRuntime, signal));
+    }
   }
 
   if (webAvailability.available) {
@@ -126,6 +132,11 @@ async function executeInjectedSkillActivate(call, skillRuntime, signal) {
   return completedSkillResult(result);
 }
 
+async function executeInjectedSkillResource(call, skillRuntime, signal) {
+  const result = await executeSkillResource(skillRuntime, call.arguments ?? {}, createSkillContext(call, signal));
+  return completedSkillResult(result);
+}
+
 function createSkillContext(call, signal) {
   return {
     workspace: call.workspace?.root,
@@ -140,6 +151,10 @@ function completedSkillResult(result) {
     content: JSON.stringify(result ?? {}, null, 2),
     details: result
   };
+}
+
+function hasSkillResourceApi(skillRuntime) {
+  return typeof skillRuntime.readReference === "function" && typeof skillRuntime.resolveAsset === "function";
 }
 
 // 工具输入、索引或工作区可能在调用前后变化。这类可预期异常必须回到模型，

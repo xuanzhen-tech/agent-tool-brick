@@ -30,8 +30,11 @@ export function compressToolExecutionResult(input) {
   const policy = selectPolicy(input.toolName, normalizedResult, contentText, detailsSerialized);
   const alreadyCompressed = contentText.includes(TOOL_RESULT_COMPRESSION_MARKER) ||
     detailsSerialized.includes(TOOL_RESULT_COMPRESSION_MARKER);
+  // skill 内容会由 AgentCli 识别并提升为专门上下文块。若在 HTTP 工具层先
+  // 压缩正文，CLI 将无法恢复完整 reference，因此这里保留受控 payload 原样传递。
+  const promotedSkillContext = hasPromotedSkillContext(normalizedResult);
   const enabled = input.compressionEnabled ?? isToolResultCompressionEnabled(input.env ?? process.env);
-  const shouldCompress = enabled && !alreadyCompressed && (
+  const shouldCompress = enabled && !alreadyCompressed && !promotedSkillContext && (
     policy.forceStructured === true ||
     contentText.length > policy.maxChars ||
     detailsSerialized.length > policy.maxChars ||
@@ -51,7 +54,7 @@ export function compressToolExecutionResult(input) {
         originalResultChars: rawSerialized.length,
         compressedResult: normalizedResult,
         truncated: false,
-        reason: alreadyCompressed ? "already_compressed" : "within_budget"
+        reason: promotedSkillContext ? "promoted_skill_context" : alreadyCompressed ? "already_compressed" : "within_budget"
       })
     };
   }
@@ -72,6 +75,23 @@ export function compressToolExecutionResult(input) {
       reason: policy.forceStructured === true ? "structured_tool_result" : "over_budget"
     })
   };
+}
+
+/**
+ * 判断结果是否携带会被 AgentCli 升级为专门上下文的 skill 正文。
+ *
+ * 这两类正文需要原样穿过工具 HTTP 服务，才能由 CLI 做独立预算校验、持久化和
+ * 跨轮注入。它们不是普通终端输出，因此不能套用通用的 head/tail 压缩策略。
+ */
+function hasPromotedSkillContext(result) {
+  const details = result?.details;
+  if (!isRecord(details)) return false;
+
+  return (
+    isRecord(details.loadedSkill) && typeof details.loadedSkill.content === "string"
+  ) || (
+    isRecord(details.loadedSkillReference) && typeof details.loadedSkillReference.content === "string"
+  );
 }
 
 function buildCompressedToolResult(input, result, policy, rawSerialized) {

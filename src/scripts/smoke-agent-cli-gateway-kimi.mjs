@@ -4,7 +4,8 @@
  * 此脚本不使用 provider key，也不 mock 模型或 Gateway。它创建一个临时工作区，
  * 让真实 Kimi 自行选择 AgentTool，在 outputs/ 中写入 UTF-8 中文文件，并验证：
  * 1. 首轮模型可见工具中没有 write_stdin；2. 模型实际选择 run_shell；
- * 3. 文件确实落盘；4. Gateway 能按 traceId 查询到这次 LLM 请求现场。
+ * 3. 文件确实落盘；4. 在诊断接口可访问时，Gateway 能按 traceId 查询到请求现场。
+ *    公网收到 403 代表 trace 读取已被隔离，需从服务器本机复核持久化。
  *
  * 这是需要网络和模型额度的人工验收脚本，不放入 release:local。
  */
@@ -26,7 +27,7 @@ const gatewayBaseUrl = normalizeGatewayBaseUrl(
   || process.env.AGENT_CLI_LLM_GATEWAY_URL
   || "http://47.109.82.99/agent-llm-gateway"
 );
-const modelId = process.env.AGENT_TOOL_REAL_KIMI_MODEL || "kimi-k2.6";
+const modelId = process.env.AGENT_TOOL_REAL_KIMI_MODEL || "kimi-k3";
 const timeoutMs = readPositiveInteger(process.env.AGENT_TOOL_REAL_KIMI_TIMEOUT_MS, 240_000);
 const traceId = `tool-gateway-kimi-${crypto.randomUUID()}`;
 const threadId = `tool-gateway-kimi-thread-${crypto.randomUUID()}`;
@@ -57,7 +58,7 @@ try {
   });
 
   // AgentCli 会在构造时规范化工具 schema；该快照就是首轮模型请求的工具集合。
-  console.log(`[smoke-agent-cli-gateway-kimi] gateway=${gatewayBaseUrl} model=${modelId}`);
+  console.log(`[smoke-agent-cli-gateway-kimi] gateway=${gatewayBaseUrl} model=${modelId} traceId=${traceId} threadId=${threadId}`);
   const events = await collectChatEvents(agent, createPrompt(), {
     traceId,
     timeoutMs
@@ -87,8 +88,8 @@ function createObservedToolRuntime(agentTool, observedDefinitions) {
 
 function createPrompt() {
   return [
-    "这是一次终端工具验收。请在当前 workspace 的 outputs/你好.txt 创建 UTF-8 文本文件，文件内容必须严格为：你好。",
-    "outputs 目录一开始可能不存在。请自行依据工具定义选择合适工具，并在同一次命令中完成：创建目录、写入 UTF-8 内容、验证目标文件存在且内容正确。",
+    "这是一次终端工具验收。请在当前 workspace 的 outputs/你好.txt 创建 UTF-8 文本文件；文件解码后的内容必须严格等于两个字符：你好。不得写成“你好。”，不得添加任何标点、标题、解释、空白或换行。",
+    "outputs 目录一开始可能不存在。请自行依据工具定义选择合适工具，并在同一次命令中完成：创建目录、以 UTF-8 无 BOM 写入精确内容、读回后以严格相等比较验证目标文件存在且内容正确。",
     "workspace 已是 shell 的当前工作目录，不是环境变量。请使用 outputs/你好.txt 这类相对路径；不要使用 $env:WORKSPACE、%WORKSPACE%、$WORKSPACE、\\outputs 或 C:\\outputs。",
     "不要启动持续服务。只有工具结果明确成功后，才回答：文件已生成。"
   ].join("\n");
@@ -151,6 +152,12 @@ async function assertLocalResult({ workspace, events, observedDefinitions }) {
 async function assertGatewayTrace({ gatewayBaseUrl, traceId }) {
   const response = await fetch(`${gatewayBaseUrl}/api/llm/traces/${encodeURIComponent(traceId)}`);
   const body = await response.text();
+  // trace 查询接口默认仅允许服务器本机或内网访问。公网 403 是预期安全边界，
+  // 不能把它误判为 AgentCli、模型调用或工具循环失败。
+  if (response.status === 403) {
+    console.log(`[smoke-agent-cli-gateway-kimi] trace query is private; verify ${traceId} from the gateway host.`);
+    return;
+  }
   assert.equal(response.ok, true, `Gateway trace query failed: HTTP ${response.status} ${body}`);
   const payload = JSON.parse(body);
   const requests = Array.isArray(payload)

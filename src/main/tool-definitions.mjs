@@ -48,7 +48,7 @@ export const RUN_SHELL_TOOL = {
     WORKSPACE_PATH_CONTRACT,
     "普通文件读写、Python、Node、git、npm、npx 和一次性脚本都优先使用本工具；Python、Node 等优先使用 mode='process'，这样 executable、args 和 stdin 不需要 shell 转义。",
     `只有必须使用 ${SHELL_CONTEXT.syntaxLabel} 的管道、变量、重定向或条件语句时才使用 mode='shell'。`,
-    "生成正式交付文件时必须写入 outputs/：在同一命令中创建缺失目录、以 UTF-8 写入、并验证目标文件存在。命令失败、超时或未验证成功时，不得宣称任务已完成。",
+    "生成正式交付文件时必须写入 outputs/：在同一命令中创建缺失目录、以 UTF-8 写入、并验证目标文件存在。用户明确指定文件正文时，必须逐字符原样写入，不得擅自添加标点、标题、解释、额外文本或换行；同次命令中要读回并用严格相等比较验证内容。命令失败、超时或未验证成功时，不得宣称任务已完成。",
     "除非用户明确要求且已核验目标路径，否则不要执行破坏性文件操作。"
   ].join(" "),
   schema: {
@@ -70,7 +70,7 @@ export const RUN_SHELL_TOOL = {
           },
           command: {
             type: "string",
-            description: `mode=shell 的命令。${SHELL_CONTEXT.osLabel} 上必须使用 ${SHELL_CONTEXT.syntaxLabel} 语法。${WORKSPACE_PATH_CONTRACT} 正式输出需在命令内创建 outputs/、使用 UTF-8，并验证文件存在。`
+            description: `mode=shell 的命令。${SHELL_CONTEXT.osLabel} 上必须使用 ${SHELL_CONTEXT.syntaxLabel} 语法。${WORKSPACE_PATH_CONTRACT} 正式输出需在命令内创建 outputs/、使用 UTF-8，并验证文件存在。用户明确指定正文时必须逐字符原样写入，不得增加标点、标题、解释、额外文本或换行；同次命令中读回并严格比较内容。`
           },
           executable: {
             type: "string",
@@ -310,14 +310,15 @@ export const SKILL_FIND_TOOL = {
 
 export const SKILL_ACTIVATE_TOOL = {
   name: "skill_activate",
-  description: "Load a selected skill's SKILL.md content from the injected agent-skill index for CLI-managed context activation.",
+  description: "激活已安装 skill 的 SKILL.md，并返回资源清单；不会读取 references 或复制 assets。",
   schema: {
     type: "function",
     function: {
       name: "skill_activate",
-      description: "Activate a skill by id or name and return a loadedSkill payload for the orchestrator.",
+      description: "按 id 或名称激活 skill。它只返回 SKILL.md 的 loadedSkill 上下文和 resources 清单；需要读取 references 或使用 assets 时，必须继续调用 skill_resource。",
       parameters: {
         type: "object",
+        additionalProperties: false,
         required: ["skill"],
         properties: {
           skill: {
@@ -331,6 +332,41 @@ export const SKILL_ACTIVATE_TOOL = {
   permissions: ["skill.content.read"],
   timeoutMs: 5_000,
   cancelable: false
+};
+
+export const SKILL_RESOURCE_TOOL = {
+  name: "skill_resource",
+  description: "受控读取已激活 skill 的 reference，或将其 asset 复制到固定的 workspace 临时目录。",
+  schema: {
+    type: "function",
+    function: {
+      name: "skill_resource",
+      description: "只能访问已安装 skill 包中的 resources。action=read_reference 只接受 references/... 的 UTF-8 文本并返回专门上下文；action=copy_asset 只接受 assets/...，会自动复制到 workspace 的 temp/skill-assets/ 固定路径。不要传目标路径，不要用它读取 scripts 或任意工作区文件。",
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        required: ["action", "skill", "path"],
+        properties: {
+          action: {
+            type: "string",
+            enum: ["read_reference", "copy_asset"],
+            description: "read_reference 读取 references/...；copy_asset 物化 assets/... 到固定临时目录。"
+          },
+          skill: {
+            type: "string",
+            description: "已通过 skill_find 找到并可通过 skill_activate 激活的 skill id 或名称。"
+          },
+          path: {
+            type: "string",
+            description: "skill 包内相对路径：read_reference 使用 references/...，copy_asset 使用 assets/...；禁止绝对路径和 ..。"
+          }
+        }
+      }
+    }
+  },
+  permissions: ["skill.resource.read", "workspace.temp.write"],
+  timeoutMs: 15_000,
+  cancelable: true
 };
 
 export const WEB_SEARCH_TOOL = {

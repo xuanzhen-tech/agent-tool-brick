@@ -6,6 +6,7 @@
  */
 
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -33,6 +34,18 @@ const skillRoot = path.join(workspace, "skills", "brief-writer");
 await fs.mkdir(skillRoot, { recursive: true });
 const skillFile = path.join(skillRoot, "SKILL.md");
 await fs.writeFile(skillFile, "---\nname: brief-writer\ndescription: Write brief replies.\n---\n\n# Brief Writer\n\nKeep replies short.\n", "utf8");
+const referencePath = path.join(skillRoot, "references", "usage.md");
+const referenceContent = "# Brief Writer Reference\n\nUse the packaged template.\n";
+// 用于验证 HTTP 服务不会把受控 reference 正文压缩成普通工具摘要。
+const largeReferenceContent = "# Large Brief Writer Reference\n\n" + "reference-line\n".repeat(10_000);
+await fs.mkdir(path.dirname(referencePath), { recursive: true });
+await fs.writeFile(referencePath, referenceContent, "utf8");
+const assetPath = path.join(skillRoot, "assets", "template.txt");
+const assetContent = "brief template\n";
+await fs.mkdir(path.dirname(assetPath), { recursive: true });
+await fs.writeFile(assetPath, assetContent, "utf8");
+const referenceHash = crypto.createHash("sha256").update(referenceContent).digest("hex");
+const assetHash = crypto.createHash("sha256").update(assetContent).digest("hex");
 const config = {
   ...resolveServiceConfig(process.env, {
     workspaceRoot: workspace,
@@ -61,6 +74,40 @@ const injectedSkillRuntime = {
     if (skill !== "brief-writer") throw new Error(`Unknown skill: ${skill}`);
     return {
       loadedSkill: { name: skill, content: "Keep replies short.", contentHash: "hash", bytes: 19 }
+    };
+  },
+  async readReference(skill, resourcePath) {
+    if (skill !== "brief-writer" || !["references/usage.md", "references/large.md"].includes(resourcePath)) {
+      throw new Error(`Unknown reference: ${resourcePath}`);
+    }
+    const content = resourcePath === "references/large.md" ? largeReferenceContent : referenceContent;
+    return {
+      read: true,
+      loadedSkillReference: {
+        skillId: "brief-writer",
+        skillName: "brief-writer",
+        path: resourcePath,
+        content,
+        contentHash: crypto.createHash("sha256").update(content).digest("hex"),
+        bytes: Buffer.byteLength(content, "utf8")
+      }
+    };
+  },
+  async resolveAsset(skill, resourcePath) {
+    if (skill !== "brief-writer" || resourcePath !== "assets/template.txt") {
+      throw new Error(`Unknown asset: ${resourcePath}`);
+    }
+    return {
+      resolved: true,
+      asset: {
+        skillId: "brief-writer",
+        skillName: "brief-writer",
+        path: resourcePath,
+        fileName: "template.txt",
+        absolutePath: assetPath,
+        contentHash: assetHash,
+        bytes: Buffer.byteLength(assetContent, "utf8")
+      }
     };
   }
 };
@@ -342,6 +389,56 @@ assert.equal(skillActivate.status, "completed");
 assert.equal(skillActivate.details.loadedSkill.name, "brief-writer");
 assert.match(skillActivate.details.loadedSkill.content, /Keep replies short/);
 
+// references 必须经由 skill_resource 读取，并以 loadedSkillReference 交给上层，
+// 不把 skill 内部路径伪装成普通工作区文件。
+assert.equal(registry.has("skill_resource"), true);
+const readReference = await registry.execute({
+  schemaVersion: "agent-cli-tool.call.v1",
+  toolCallId: "call-skill-reference",
+  toolName: "skill_resource",
+  arguments: { action: "read_reference", skill: "brief-writer", path: "references/usage.md" },
+  workspace: { root: workspace }
+});
+assert.equal(readReference.status, "completed");
+assert.equal(readReference.details.loadedSkillReference.contentHash, referenceHash);
+assert.match(readReference.details.loadedSkillReference.content, /packaged template/);
+
+// asset 不允许模型指定目标；它只能被物化到固定的 workspace temp/skill-assets 根下。
+const copiedAsset = await registry.execute({
+  schemaVersion: "agent-cli-tool.call.v1",
+  toolCallId: "call-skill-asset",
+  toolName: "skill_resource",
+  arguments: { action: "copy_asset", skill: "brief-writer", path: "assets/template.txt" },
+  workspace: { root: workspace }
+});
+assert.equal(copiedAsset.status, "completed");
+assert.equal(copiedAsset.details.copied, true);
+assert.equal(copiedAsset.details.workspacePath, `temp/skill-assets/brief-writer/${assetHash}/template.txt`);
+assert.equal(await fs.readFile(path.join(workspace, copiedAsset.details.workspacePath), "utf8"), assetContent);
+const reusedAsset = await registry.execute({
+  schemaVersion: "agent-cli-tool.call.v1",
+  toolCallId: "call-skill-asset-reused",
+  toolName: "skill_resource",
+  arguments: { action: "copy_asset", skill: "brief-writer", path: "assets/template.txt" },
+  workspace: { root: workspace }
+});
+assert.equal(reusedAsset.status, "completed");
+assert.equal(reusedAsset.details.reused, true);
+const rejectedDestination = await registry.execute({
+  schemaVersion: "agent-cli-tool.call.v1",
+  toolCallId: "call-skill-asset-destination",
+  toolName: "skill_resource",
+  arguments: {
+    action: "copy_asset",
+    skill: "brief-writer",
+    path: "assets/template.txt",
+    destination: "outputs/not-allowed.txt"
+  },
+  workspace: { root: workspace }
+});
+assert.equal(rejectedDestination.status, "failed");
+assert.match(rejectedDestination.error.message, /destination path is not supported/);
+
 // 注入的 AgentSkill 运行时异常也必须被 registry 转成可恢复 tool result。
 const failedSkillRuntime = await registry.execute({
   schemaVersion: "agent-cli-tool.call.v1",
@@ -355,14 +452,11 @@ assert.equal(failedSkillRuntime.error.code, "tool_execution_failed");
 
 const objectTool = new AgentTool({
   workspace,
-  skillRuntime: {
-    definitions: [{ name: "brief-writer", description: "Write brief replies." }],
-    find: async (filter) => ({ skills: [{ name: "brief-writer", query: filter.query }] }),
-    activate: async (skill) => ({ loadedSkill: { name: skill, content: "Keep replies short.", contentHash: "hash", bytes: 19 } })
-  }
+  skillRuntime: injectedSkillRuntime
 });
 assert.equal(objectTool.definitions.some((tool) => tool.function?.name === "run_shell"), true);
 assert.equal(objectTool.definitions.some((tool) => tool.function?.name === "skill_find"), true);
+assert.equal(objectTool.definitions.some((tool) => tool.function?.name === "skill_resource"), true);
 assert.equal(objectTool.definitions.some((tool) => tool.function?.name === "write_stdin"), false);
 const objectShell = await objectTool.execute("run_shell", {
   mode: "process",
@@ -385,6 +479,13 @@ assert.equal(objectTool.definitions.some((tool) => tool.function?.name === "writ
 const objectSkill = await objectTool.execute("skill_activate", { skill: "brief-writer" }, { workspace });
 assert.equal(objectSkill.status, "completed");
 assert.equal(objectSkill.details.loadedSkill.name, "brief-writer");
+const objectReference = await objectTool.execute("skill_resource", {
+  action: "read_reference",
+  skill: "brief-writer",
+  path: "references/usage.md"
+}, { workspace });
+assert.equal(objectReference.status, "completed");
+assert.equal(objectReference.details.loadedSkillReference.contentHash, referenceHash);
 
 // 同一 AgentTool 对象启动 HTTP 服务时，服务也必须复用注入的 AgentSkill runtime。
 const objectServer = await objectTool.createServer({
@@ -395,6 +496,7 @@ try {
   const manifestResponse = await fetch(`${objectServerUrl}/api/tools/manifest`);
   const manifest = await manifestResponse.json();
   assert.equal(manifest.tools.some((tool) => tool.name === "skill_find"), true);
+  assert.equal(manifest.tools.some((tool) => tool.name === "skill_resource"), true);
 
   const skillResponse = await fetch(`${objectServerUrl}/api/tools/call`, {
     method: "POST",
@@ -410,6 +512,38 @@ try {
   const skillResponseBody = await skillResponse.json();
   assert.equal(skillResponseBody.status, "completed");
   assert.equal(skillResponseBody.details.skills[0].name, "brief-writer");
+
+  const resourceResponse = await fetch(`${objectServerUrl}/api/tools/call`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      schemaVersion: "agent-cli-tool.call.v1",
+      toolCallId: "object-server-skill-resource",
+      toolName: "skill_resource",
+      arguments: { action: "read_reference", skill: "brief-writer", path: "references/usage.md" },
+      workspace: { root: workspace }
+    })
+  });
+  const resourceResponseBody = await resourceResponse.json();
+  assert.equal(resourceResponseBody.status, "completed");
+  assert.equal(resourceResponseBody.details.loadedSkillReference.contentHash, referenceHash);
+
+  // 通过 HTTP transport 返回的超大 reference 也必须完整保留，后续由 AgentCli
+  // 独立校验大小并提升为 loaded_skill_reference，而不是在工具层做 head/tail 截断。
+  const largeResourceResponse = await fetch(`${objectServerUrl}/api/tools/call`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      schemaVersion: "agent-cli-tool.call.v1",
+      toolCallId: "object-server-large-skill-resource",
+      toolName: "skill_resource",
+      arguments: { action: "read_reference", skill: "brief-writer", path: "references/large.md" },
+      workspace: { root: workspace }
+    })
+  });
+  const largeResourceResponseBody = await largeResourceResponse.json();
+  assert.equal(largeResourceResponseBody.status, "completed");
+  assert.equal(largeResourceResponseBody.details.loadedSkillReference.content, largeReferenceContent);
 } finally {
   await objectServer.close();
 }
