@@ -52,6 +52,7 @@ jobs:
           node --check src/cli.mjs
           node --check src/main/diagnostics.mjs
           node --check src/main/env.mjs
+          node --check src/main/image-runtime.mjs
           node --check src/main/launch-config.mjs
           node --check src/main/process-runtime.mjs
           node --check src/main/search-runtime.mjs

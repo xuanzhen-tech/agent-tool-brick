@@ -22,6 +22,7 @@
 - 通过注入的 `AgentSkill` 对象暴露可选 `skill_find`、`skill_activate` 和 `skill_resource`
 - 通过服务端 Tool Gateway 暴露 `web_search` 和 `web_fetch`
 - 通过服务端 Tool Gateway 暴露 `email_send`
+- 通过服务端 Tool Gateway 暴露 `image_present`，让模型观察 workspace 内图片
 - 通过注入的 `python-runtime` 支持 Python-backed 本地工具执行
 - 透传产品注入的 Node 包环境，让 `run_shell` / `exec_command` 可以使用产品组装的能力
 - 通过注入的 `playwright-browsers` 为子进程设置 Playwright Chromium 缓存路径
@@ -108,7 +109,18 @@ HTML、图表文件和 manifest。所有正式文件固定写到 `outputs/visual
 图表代码；详情见 [第三方运行时说明](src/main/vendor/THIRD_PARTY_NOTICES.md)。外部 PPT 等
 复杂能力则以 `toolProviders` 接入，完整合同见 [Tool Provider 对接合同](docs/tool-provider-contract.md)。
 
-`web_search`、`web_fetch` 和 `email_send` 默认通过固定 Server Tool Gateway 转发。Tavily key、SMTP host、SMTP username/password 都只配置在服务器上，产品仓库和 `AgentTool` 构造函数不接收这些密钥。`email_send` 的附件仍由本地 `AgentTool` 读取 workspace 内文件并做大小/路径校验，然后把文件内容随请求交给服务器发送。
+`web_search`、`web_fetch`、`email_send` 和 `image_present` 默认通过固定 Server Tool Gateway 转发。Tavily key、SMTP host、SMTP username/password、视觉模型 provider key 都只配置在服务器上，产品仓库和 `AgentTool` 构造函数不接收这些密钥。`email_send` 的附件和 `image_present` 的图片仍由本地 `AgentTool` 读取 workspace 内文件并做大小/路径校验，然后把文件内容随请求交给服务器。
+
+`image_present` 是通用看图工具，不是 PPT 专属 QA。模型先用其他工具渲染 PNG/JPEG/WebP，再调用：
+
+```js
+await agentTool.execute("image_present", {
+  path: "outputs/slide-01.png",
+  prompt: "请检查文字是否裁切、图表是否可读。"
+});
+```
+
+工具会返回视觉模型观察文本，并产出 `kind=image`、`renderer=image-present` 的 `agent-output.v1` artifact。`AgentCli` 会把图片 artifact 发给产品界面，同时在后续上下文里保留观察摘要，模型自己决定是否继续修复。
 
 `skill_find` 支持两类动作：
 

@@ -8,6 +8,7 @@
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 
@@ -19,6 +20,7 @@ import { createToolRegistry } from "../main/tool-registry.mjs";
 
 const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "agent-tool-smoke-"));
 await fs.writeFile(path.join(workspace, "note.txt"), "alpha\nneedle\nomega\n", "utf8");
+const imageGateway = await createMockImagePresentGateway();
 
 // UTF-8 多字节字符可能被子进程拆分到多个 data chunk；解码器必须保持字符完整。
 const splitUtf8Collector = createOutputCollector(64);
@@ -49,7 +51,7 @@ const assetHash = crypto.createHash("sha256").update(assetContent).digest("hex")
 const config = {
   ...resolveServiceConfig(process.env, {
     workspaceRoot: workspace,
-    webGatewayBaseUrl: "http://127.0.0.1:0",
+    webGatewayBaseUrl: imageGateway.url,
     webGatewayToken: "smoke-token",
     maxTimeoutMs: 5_000,
     maxOutputBytes: 8_000,
@@ -228,6 +230,37 @@ const outputWriteFailure = await registry.execute({
 });
 assert.equal(outputWriteFailure.status, "failed");
 assert.match(outputWriteFailure.error.message, /未验证执行成功/);
+
+const pngBytes = Buffer.from("89504e470d0a1a0a0000000d49484452", "hex");
+await fs.writeFile(path.join(workspace, "outputs", "preview.png"), pngBytes);
+const imagePresent = await registry.execute({
+  schemaVersion: "agent-cli-tool.call.v1",
+  toolCallId: "call-image-present",
+  toolName: "image_present",
+  arguments: {
+    path: "outputs/preview.png",
+    prompt: "请确认这张截图是否可读。"
+  },
+  workspace: { root: workspace },
+  limits: { timeoutMs: 5_000, maxOutputChars: 8_000 }
+});
+assert.equal(imagePresent.status, "completed");
+assert.match(imagePresent.content, /观察结果/);
+assert.equal(imagePresent.details.imagePresent.path, "outputs/preview.png");
+assert.equal(imagePresent.artifacts[0]?.schemaVersion, "agent-output.v1");
+assert.equal(imagePresent.artifacts[0]?.renderer, "image-present");
+assert.equal(imagePresent.artifacts[0]?.files[0]?.path, "outputs/preview.png");
+assert.equal(imageGateway.requests[0]?.path, "outputs/preview.png");
+assert.equal(imageGateway.requests[0]?.mimeType, "image/png");
+const imageEscape = await registry.execute({
+  schemaVersion: "agent-cli-tool.call.v1",
+  toolCallId: "call-image-present-escape",
+  toolName: "image_present",
+  arguments: { path: "../outside.png" },
+  workspace: { root: workspace }
+});
+assert.equal(imageEscape.status, "failed");
+assert.match(imageEscape.error.message, /workspace/);
 
 const splitProcessOutput = await registry.execute({
   schemaVersion: "agent-cli-tool.call.v1",
@@ -654,6 +687,7 @@ assert.equal(playwrightTerminal.status, "completed");
 assert.equal(playwrightTerminal.details.running, false);
 assert.match(playwrightTerminal.details.stdout, /terminal-import:product-esm/);
 await playwrightTool.dispose();
+await imageGateway.close();
 
 console.log("[smoke-tools] ok");
 
@@ -700,4 +734,51 @@ async function pathExists(targetPath) {
   } catch {
     return false;
   }
+}
+
+async function createMockImagePresentGateway() {
+  const requests = [];
+  const server = http.createServer(async (request, response) => {
+    if (request.method !== "POST" || request.url !== "/api/tools/image/present") {
+      response.writeHead(404, { "content-type": "application/json" });
+      response.end(JSON.stringify({ ok: false, error: { code: "not_found", message: "not found" } }));
+      return;
+    }
+    const body = await readRequestJson(request);
+    requests.push(body);
+    response.writeHead(200, { "content-type": "application/json; charset=utf-8" });
+    response.end(JSON.stringify({
+      ok: true,
+      modelId: "vision-smoke",
+      provider: "mock",
+      model: "mock-vision",
+      path: body.path,
+      mimeType: body.mimeType,
+      bytes: Buffer.byteLength(body.contentBase64 ?? "", "base64"),
+      contentHash: body.contentHash,
+      observation: `已看到图片 ${body.path}，截图内容可读。`
+    }));
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  return {
+    url: `http://127.0.0.1:${address.port}`,
+    requests,
+    close: () => new Promise((resolve) => server.close(resolve))
+  };
+}
+
+function readRequestJson(request) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    request.on("data", (chunk) => chunks.push(chunk));
+    request.on("error", reject);
+    request.on("end", () => {
+      try {
+        resolve(JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}"));
+      } catch (error) {
+        reject(error);
+      }
+    });
+  });
 }

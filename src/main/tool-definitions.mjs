@@ -500,6 +500,40 @@ export const EMAIL_SEND_TOOL = {
   cancelable: true
 };
 
+export const IMAGE_PRESENT_TOOL = {
+  name: "image_present",
+  description: [
+    "把当前 workspace 中的 PNG/JPEG/WebP 图片呈递给服务端视觉模型观察，并返回可供下一步推理使用的观察结果。",
+    "适合渲染截图后检查页面、图表、PPT 页面或其他图片内容；它不是自动 QA 门禁，也不会修改文件。",
+    "path 使用 workspace 相对路径，例如 outputs/slide-01.png；不要用 run_shell 读取图片二进制内容。"
+  ].join(" "),
+  schema: {
+    type: "function",
+    function: {
+      name: "image_present",
+      description: "呈递 workspace 内图片给视觉模型观察。返回观察文本，并生成 image artifact 供界面展示和后续上下文引用。",
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        required: ["path"],
+        properties: {
+          path: {
+            type: "string",
+            description: "workspace 相对图片路径，例如 outputs/screenshot.png；也接受位于 workspace 内部的绝对路径。"
+          },
+          prompt: {
+            type: "string",
+            description: "可选观察重点，例如检查文字是否裁切、图表是否可读、页面是否和预期一致。"
+          }
+        }
+      }
+    }
+  },
+  permissions: ["workspace.read", "network.vision.present"],
+  timeoutMs: 60_000,
+  cancelable: true
+};
+
 // 可视化工具默认不进入 new AgentTool() 的旧行为。产品需要在 tools 白名单中
 // 明确选择它们，才会让模型看到这些数据处理和文件输出能力。
 export const VISUALIZATION_CREATE_CHART_TOOL = {

@@ -12,6 +12,7 @@ import { promisify } from "node:util";
 import { brickDefinition } from "../brick-definition.mjs";
 import { isRgAvailable } from "./search-runtime.mjs";
 import { isEmailProviderAvailable } from "./email-runtime.mjs";
+import { isImagePresentProviderAvailable } from "./image-runtime.mjs";
 import { isWebProviderAvailable } from "./web-runtime.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -41,6 +42,7 @@ export async function createDiagnosticsReport(config, options = {}) {
   checks.push(createSkillRuntimeCheck(options.skillRuntime));
   checks.push(createWebProviderCheck(config));
   checks.push(createEmailProviderCheck(config));
+  checks.push(createImagePresentProviderCheck(config));
 
   const status = checks.some((check) => check.status === "fail")
     ? "fail"
@@ -158,6 +160,24 @@ function createEmailProviderCheck(config) {
     id: "tool.email_provider",
     status: "warn",
     summary: "email_send is not exposed because the server tool gateway is not configured.",
+    detail: availability.detail
+  };
+}
+
+function createImagePresentProviderCheck(config) {
+  const availability = isImagePresentProviderAvailable(config);
+  if (availability.available) {
+    return {
+      id: "tool.image_present",
+      status: "pass",
+      summary: "image_present is exposed through the server tool gateway.",
+      detail: availability.detail
+    };
+  }
+  return {
+    id: "tool.image_present",
+    status: "warn",
+    summary: "image_present is not exposed because the server tool gateway is not configured.",
     detail: availability.detail
   };
 }

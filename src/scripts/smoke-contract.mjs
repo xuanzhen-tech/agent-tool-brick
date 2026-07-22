@@ -25,6 +25,7 @@ import {
 import {
   EMAIL_SEND_TOOL,
   EXEC_COMMAND_TOOL,
+  IMAGE_PRESENT_TOOL,
   RUN_SHELL_TOOL,
   SKILL_FIND_TOOL,
   SKILL_RESOURCE_TOOL,
@@ -34,7 +35,7 @@ import { createToolResult } from "../main/tool-contract.mjs";
 
 assert.equal(brickDefinition.id, "agent-tool");
 assert.equal(brickDefinition.kind, "tool");
-assert.equal(brickDefinition.version, "0.4.1");
+assert.equal(brickDefinition.version, "0.4.2");
 assert.equal(validateBrickDefinition(brickDefinition).ok, true);
 assert.equal(brickDefinition.runtimeDependencies.some((item) => item.type === "node-runtime" && item.required === true), true);
 assert.equal(brickDefinition.runtimeDependencies.some((item) => item.slot === "tool:rg" && item.required === false), true);
@@ -45,6 +46,7 @@ assert.equal(brickDefinition.capabilities.some((item) => item.id === "agent-tool
 assert.equal(brickDefinition.capabilities.some((item) => item.id === "agent-tool.skill-tools"), true);
 assert.equal(brickDefinition.capabilities.some((item) => item.id === "agent-tool.web"), true);
 assert.equal(brickDefinition.capabilities.some((item) => item.id === "agent-tool.email"), true);
+assert.equal(brickDefinition.capabilities.some((item) => item.id === "agent-tool.image-present"), true);
 assert.equal(brickDefinition.capabilities.some((item) => item.id === "agent-tool.python-runtime"), true);
 assert.equal(brickDefinition.capabilities.some((item) => item.id === "agent-tool.node-package-runtime"), true);
 assert.equal(brickDefinition.capabilities.some((item) => item.id === "agent-tool.playwright-browsers-env"), true);
@@ -176,6 +178,10 @@ assert.deepEqual(SKILL_RESOURCE_TOOL.schema.function.parameters.properties.actio
 assert.equal("destination" in SKILL_RESOURCE_TOOL.schema.function.parameters.properties, false);
 assert.equal(EMAIL_SEND_TOOL.schema.function.parameters.required.includes("to"), true);
 assert.equal(EMAIL_SEND_TOOL.schema.function.parameters.required.includes("subject"), true);
+assert.deepEqual(IMAGE_PRESENT_TOOL.schema.function.parameters.required, ["path"]);
+assert.equal(IMAGE_PRESENT_TOOL.schema.function.parameters.additionalProperties, false);
+assert.match(IMAGE_PRESENT_TOOL.description, /视觉模型/);
+assert.match(IMAGE_PRESENT_TOOL.description, /workspace 相对路径/);
 
 const manifest = createAgentToolManifest({
   baseUrl: "http://127.0.0.1:8791",

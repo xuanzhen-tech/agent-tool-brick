@@ -10,12 +10,14 @@
 import { brickDefinition } from "../brick-definition.mjs";
 import { createDiagnosticsReport } from "./diagnostics.mjs";
 import { isEmailProviderAvailable } from "./email-runtime.mjs";
+import { isImagePresentProviderAvailable } from "./image-runtime.mjs";
 import { resolveServiceConfig } from "./launch-config.mjs";
 import { createRuntimeDependencyConfig } from "./runtime-dependency-config.mjs";
 import { createTerminalSessionManager } from "./terminal-runtime.mjs";
 import {
   EMAIL_SEND_TOOL,
   EXEC_COMMAND_TOOL,
+  IMAGE_PRESENT_TOOL,
   RUN_SHELL_TOOL,
   SKILL_ACTIVATE_TOOL,
   SKILL_FIND_TOOL,
@@ -43,6 +45,7 @@ const BUILTIN_TOOL_NAMES = new Set([
   WEB_SEARCH_TOOL.name,
   WEB_FETCH_TOOL.name,
   EMAIL_SEND_TOOL.name,
+  IMAGE_PRESENT_TOOL.name,
   VISUALIZATION_CREATE_CHART_TOOL.name,
   VISUALIZATION_CREATE_DASHBOARD_TOOL.name
 ]);
@@ -200,6 +203,7 @@ function selectModelToolSchemas({ config, runtimeDependencies, skillRuntime, ter
     add(WEB_FETCH_TOOL);
   }
   add(EMAIL_SEND_TOOL, isEmailProviderAvailable(config).available);
+  add(IMAGE_PRESENT_TOOL, isImagePresentProviderAvailable(config).available);
   add(VISUALIZATION_CREATE_CHART_TOOL);
   add(VISUALIZATION_CREATE_DASHBOARD_TOOL);
 

@@ -10,6 +10,7 @@ import { createAgentToolManifest } from "./tool-contract.mjs";
 import {
   EMAIL_SEND_TOOL,
   EXEC_COMMAND_TOOL,
+  IMAGE_PRESENT_TOOL,
   RUN_SHELL_TOOL,
   SKILL_ACTIVATE_TOOL,
   SKILL_FIND_TOOL,
@@ -22,6 +23,7 @@ import {
   WORKSPACE_SEARCH_TOOL
 } from "./tool-definitions.mjs";
 import { executeEmailSend, isEmailProviderAvailable } from "./email-runtime.mjs";
+import { executeImagePresent, isImagePresentProviderAvailable } from "./image-runtime.mjs";
 import { executeRunShell } from "./shell-runtime.mjs";
 import { executeWorkspaceSearch, isRgAvailable } from "./search-runtime.mjs";
 import { executeSkillResource } from "./skill-resource-runtime.mjs";
@@ -36,6 +38,7 @@ export async function createToolRegistry(config, options = {}) {
   const skillRuntime = normalizeSkillRuntime(options.skillRuntime);
   const webAvailability = isWebProviderAvailable(config);
   const emailAvailability = isEmailProviderAvailable(config);
+  const imagePresentAvailability = isImagePresentProviderAvailable(config);
   const terminalManager = options.terminalManager ?? createTerminalSessionManager(config);
   const selectedTools = normalizeSelectedTools(options.selectedTools);
   const providerEntries = options.providerEntries ?? normalizeToolProviders(options.toolProviders);
@@ -76,6 +79,10 @@ export async function createToolRegistry(config, options = {}) {
 
   if (emailAvailability.available) {
     addTool(EMAIL_SEND_TOOL, executeEmailSend);
+  }
+
+  if (imagePresentAvailability.available) {
+    addTool(IMAGE_PRESENT_TOOL, executeImagePresent);
   }
 
   addTool(VISUALIZATION_CREATE_CHART_TOOL, executeVisualizationCreateChart);

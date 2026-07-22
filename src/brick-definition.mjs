@@ -16,7 +16,7 @@ import { fileURLToPath } from "node:url";
 
 const BRICK_ID = "agent-tool";
 const BRICK_NAME = "Agent Tool";
-const BRICK_VERSION = "0.4.1";
+const BRICK_VERSION = "0.4.2";
 const BRICK_KIND = "tool";
 
 const toolServiceCapability = createBrickCapability({
@@ -75,6 +75,15 @@ const emailToolsCapability = createBrickCapability({
   name: "Email Send Tool",
   type: "tool",
   description: "Sends email through the server-side tool gateway; SMTP credentials stay on the server.",
+  requires: ["node-runtime", "server-tool-gateway"],
+  optional: true
+});
+
+const imagePresentCapability = createBrickCapability({
+  id: "agent-tool.image-present",
+  name: "Image Present Tool",
+  type: "tool",
+  description: "Presents workspace images to the server-side vision gateway and returns model-readable observations plus image artifacts.",
   requires: ["node-runtime", "server-tool-gateway"],
   optional: true
 });
@@ -179,6 +188,7 @@ export const brickDefinition = createBrickDefinition({
     skillToolsCapability,
     webToolsCapability,
     emailToolsCapability,
+    imagePresentCapability,
     pythonRuntimeCapability,
     nodePackageRuntimeCapability,
     playwrightBrowsersCapability,
