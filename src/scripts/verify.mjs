@@ -125,7 +125,12 @@ async function validateRuntimeArtifactIfPresent() {
     "src/main/terminal-runtime.mjs",
     "src/main/tool-contract.mjs",
     "src/main/tool-result-compression.mjs",
-    "src/main/web-runtime.mjs"
+    "src/main/web-runtime.mjs",
+    "src/main/tool-provider.mjs",
+    "src/main/visualization-runtime.mjs",
+    "node_modules/vega/package.json",
+    "node_modules/vega-lite/package.json",
+    "node_modules/@resvg/resvg-js/package.json"
   ];
   for (const requiredFile of requiredFiles) {
     if (!runtimeFiles.includes(requiredFile)) {

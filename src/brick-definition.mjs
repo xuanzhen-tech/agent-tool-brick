@@ -16,7 +16,7 @@ import { fileURLToPath } from "node:url";
 
 const BRICK_ID = "agent-tool";
 const BRICK_NAME = "Agent Tool";
-const BRICK_VERSION = "0.3.0";
+const BRICK_VERSION = "0.4.0";
 const BRICK_KIND = "tool";
 
 const toolServiceCapability = createBrickCapability({
@@ -106,6 +106,33 @@ const playwrightBrowsersCapability = createBrickCapability({
   optional: true
 });
 
+const visualizationCapability = createBrickCapability({
+  id: "agent-tool.data-visualization",
+  name: "Data Visualization Tools",
+  type: "tool",
+  description: "使用受控 Vega-Lite 声明生成图表与可导出的可视化 artifact。",
+  requires: ["node-runtime"],
+  optional: true
+});
+
+const dashboardCapability = createBrickCapability({
+  id: "agent-tool.structured-dashboard",
+  name: "Structured BI Dashboard Tool",
+  type: "tool",
+  description: "生成 KPI、洞察、图表和表格组成的结构化 BI 看板 artifact。",
+  requires: ["node-runtime"],
+  optional: true
+});
+
+const toolProviderCapability = createBrickCapability({
+  id: "agent-tool.provider-composition",
+  name: "Tool Provider Composition",
+  type: "api",
+  description: "将外部能力对象以受控 Tool Provider 合同聚合到统一模型工具面。",
+  requires: ["node-runtime"],
+  optional: true
+});
+
 export const brickDefinition = createBrickDefinition({
   id: BRICK_ID,
   name: BRICK_NAME,
@@ -154,13 +181,19 @@ export const brickDefinition = createBrickDefinition({
     emailToolsCapability,
     pythonRuntimeCapability,
     nodePackageRuntimeCapability,
-    playwrightBrowsersCapability
+    playwrightBrowsersCapability,
+    visualizationCapability,
+    dashboardCapability,
+    toolProviderCapability
   ],
   configSchema: {
     type: "object",
     properties: {
-      workspace: { type: "string" }
-    }
+      workspace: { type: "string" },
+      tools: { type: "array", items: { type: "string" } },
+      toolProviders: { type: "array", items: { type: "object" } }
+    },
+    additionalProperties: false
   },
   runtimeDependencies: [
     {

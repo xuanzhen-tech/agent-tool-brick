@@ -38,6 +38,10 @@ for (const file of mainSourceFiles) {
   await fs.writeFile(target, file.content);
 }
 
+// 可视化工具依赖 Vega 与 Resvg。artifact 必须连同生产依赖交付，不能假设
+// 产品仓库或解压目录存在 node_modules，否则 OSS 安装后的 runtime 会失效。
+await copyProductionDependencies();
+
 await writeJsonIntoRuntime("package.json", {
   name: "@xuanzhen-tech/agent-tool-runtime",
   version: brickDefinition.version,
@@ -45,7 +49,8 @@ await writeJsonIntoRuntime("package.json", {
   type: "module",
   bin: {
     "agent-tool": "./src/cli.mjs"
-  }
+  },
+  dependencies: JSON.parse(await fs.readFile(path.join(repoRoot, "package.json"), "utf8")).dependencies
 });
 
 await writeJsonIntoRuntime("runtime-contract.json", createAgentToolRuntimeContract({
@@ -95,6 +100,44 @@ async function copyFileIntoRuntime(source, targetRelativePath) {
   const target = path.join(runtimeDir, ...targetRelativePath.split("/"));
   await fs.mkdir(path.dirname(target), { recursive: true });
   await fs.copyFile(source, target);
+}
+
+/**
+ * 递归复制当前 package.json 声明的生产依赖及其运行时依赖。
+ * npm 的扁平目录能让每个包都从 runtime/node_modules 解析依赖；本函数不复制
+ * 开发依赖、npm cache 或仓库源码，保持 artifact 可追溯且体积可控。
+ */
+async function copyProductionDependencies() {
+  const packageJson = JSON.parse(await fs.readFile(path.join(repoRoot, "package.json"), "utf8"));
+  const queue = Object.keys(packageJson.dependencies ?? {});
+  const copied = new Set();
+  while (queue.length > 0) {
+    const packageName = queue.shift();
+    if (copied.has(packageName)) continue;
+    const source = path.join(repoRoot, "node_modules", ...packageName.split("/"));
+    let dependencyPackage;
+    try {
+      dependencyPackage = JSON.parse(await fs.readFile(path.join(source, "package.json"), "utf8"));
+    } catch (error) {
+      // 非当前平台的 optional native package 不存在是正常情况；它不会被当前
+      // runtime require。其它缺失生产依赖必须失败，避免发布一个不可运行 artifact。
+      if (packageName.startsWith("@resvg/resvg-js-") && error?.code === "ENOENT") continue;
+      throw new Error(`缺少生产依赖 ${packageName}，无法构建 agent-tool artifact。`);
+    }
+    const destination = path.join(runtimeDir, "node_modules", ...packageName.split("/"));
+    await fs.cp(source, destination, {
+      recursive: true,
+      dereference: true,
+      filter: (candidate) => !candidate.includes(`${path.sep}.git${path.sep}`) && !candidate.endsWith(`${path.sep}.npmignore`)
+    });
+    copied.add(packageName);
+    for (const dependency of Object.keys({
+      ...(dependencyPackage.dependencies ?? {}),
+      ...(dependencyPackage.optionalDependencies ?? {})
+    })) {
+      if (!copied.has(dependency)) queue.push(dependency);
+    }
+  }
 }
 
 async function writeJsonIntoRuntime(targetRelativePath, value) {

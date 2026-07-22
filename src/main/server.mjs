@@ -23,7 +23,15 @@ export async function createAgentToolServer(input = {}) {
   const skillRuntime = input.skillRuntime;
 
   async function createRegistry() {
-    return await createToolRegistry(config, { terminalManager, skillRuntime });
+    // 对象模式必须复用 AgentTool 已组合好的 Provider 和工具白名单；否则 HTTP
+    // manifest 会与直接 SDK 调用出现两套工具集合。
+    if (typeof input.createRegistry === "function") return await input.createRegistry();
+    return await createToolRegistry(config, {
+      terminalManager,
+      skillRuntime,
+      selectedTools: input.selectedTools,
+      providerEntries: input.providerEntries
+    });
   }
 
   const server = http.createServer(async (request, response) => {

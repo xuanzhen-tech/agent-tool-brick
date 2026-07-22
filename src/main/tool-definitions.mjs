@@ -499,3 +499,59 @@ export const EMAIL_SEND_TOOL = {
   timeoutMs: 30_000,
   cancelable: true
 };
+
+// 可视化工具默认不进入 new AgentTool() 的旧行为。产品需要在 tools 白名单中
+// 明确选择它们，才会让模型看到这些数据处理和文件输出能力。
+export const VISUALIZATION_CREATE_CHART_TOOL = {
+  name: "visualization_create_chart",
+  description: "使用受控 Vega-Lite 声明和内联表格数据生成图表。会把 JSON、SVG、PNG 写入当前 workspace 的 outputs/visualizations/，并返回可供界面直接渲染的 artifact；不执行任意 HTML 或 JavaScript。",
+  schema: {
+    type: "function",
+    function: {
+      name: "visualization_create_chart",
+      description: "创建单个数据图表。spec 必须是纯 Vega-Lite 声明式对象，data 必须是对象数组；支持 fold、aggregate、filter、calculate 等受控数据整形，禁止 URL、远端数据、信号、lookup、任意脚本和 HTML。成功后输出固定在 workspace 的 outputs/visualizations/。",
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        required: ["spec"],
+        properties: {
+          title: { type: "string", description: "图表标题。" },
+          spec: { type: "object", description: "Vega-Lite v5 声明式图表 spec。可使用受控 transform（如 fold、aggregate、filter、calculate）；不要使用 url、signal、expr 或 lookup。" },
+          data: { type: "array", items: { type: "object" }, description: "可选的内联对象数组。提供时会覆盖 spec.data。" }
+        }
+      }
+    }
+  },
+  permissions: ["workspace.outputs.write"],
+  timeoutMs: 60_000,
+  cancelable: true,
+  defaultVisible: false
+};
+
+export const VISUALIZATION_CREATE_DASHBOARD_TOOL = {
+  name: "visualization_create_dashboard",
+  description: "使用受控 KPI、洞察、图表、表格和文本面板生成结构化 BI 看板。会输出 dashboard JSON、静态 HTML、图表 SVG/PNG 到 workspace 的 outputs/visualizations/，并返回结构化 artifact。",
+  schema: {
+    type: "function",
+    function: {
+      name: "visualization_create_dashboard",
+      description: "创建结构化 BI 看板。panels 只支持 chart、table、text；chart 使用受控 Vega-Lite spec。当前不承诺筛选、联动或下钻等交互能力，不能把它们伪装为已实现。",
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        required: ["title", "panels"],
+        properties: {
+          title: { type: "string", description: "看板标题。" },
+          summary: { type: "string", description: "可选的看板摘要。" },
+          kpis: { type: "array", description: "可选 KPI 数组，每项包含 label、value、change、tone。", items: { type: "object" } },
+          insights: { type: "array", description: "可选关键洞察文本数组。", items: { type: "string" } },
+          panels: { type: "array", minItems: 1, description: "面板数组。chart 需要 spec 和可选 data；table 需要 columns、rows；text 需要 content。", items: { type: "object" } }
+        }
+      }
+    }
+  },
+  permissions: ["workspace.outputs.write"],
+  timeoutMs: 120_000,
+  cancelable: true,
+  defaultVisible: false
+};

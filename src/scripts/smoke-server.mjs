@@ -11,6 +11,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 
+import { AgentTool } from "../index.mjs";
 import { resolveServiceConfig } from "../main/launch-config.mjs";
 import { createAgentToolServer } from "../main/server.mjs";
 
@@ -78,7 +79,8 @@ try {
   assert.equal(manifest.schemaVersion, "agent-cli-tool.manifest.v1");
   assert.equal(manifest.tools.some((tool) => tool.name === "run_shell"), true);
   assert.equal(manifest.tools.some((tool) => tool.name === "exec_command"), true);
-  assert.equal(manifest.tools.some((tool) => tool.name === "write_stdin"), true);
+  // 没有持续终端时不向模型暴露 write_stdin，避免把它误用成文件写入工具。
+  assert.equal(manifest.tools.some((tool) => tool.name === "write_stdin"), false);
   assert.equal(manifest.tools.some((tool) => tool.name === "skill_find"), true);
   assert.equal(manifest.tools.some((tool) => tool.name === "web_search"), true);
   assert.equal(manifest.tools.some((tool) => tool.name === "email_send"), true);
@@ -174,6 +176,9 @@ try {
   assert.equal(terminalStart.details.running, true);
   assert.ok(terminalStart.details.session_id);
 
+  const activeSessionManifest = await getJson(`${url}/api/tools/manifest`);
+  assert.equal(activeSessionManifest.tools.some((tool) => tool.name === "write_stdin"), true);
+
   const sessionCanceled = await postJson(`${url}/api/tools/cancel`, {
     session_id: terminalStart.details.session_id,
     reason: "smoke terminal cancel"
@@ -248,6 +253,57 @@ try {
     assert.equal(standaloneManifest.tools.some((tool) => tool.name === "skill_activate"), false);
   } finally {
     await standaloneRuntime.close();
+  }
+
+  // AgentTool 的对象模式可以把复杂 brick 作为 Provider 组合后再暴露 HTTP transport。
+  // 这里验证 manifest 和执行路径都复用同一个 Provider，而非只有 SDK 直调能生效。
+  const provider = {
+    id: "server-provider",
+    toolDescriptors: [{
+      name: "provider_echo",
+      description: "HTTP provider smoke echo.",
+      schema: {
+        type: "function",
+        function: {
+          name: "provider_echo",
+          description: "HTTP provider smoke echo.",
+          parameters: { type: "object", additionalProperties: false }
+        }
+      },
+      permissions: [],
+      timeoutMs: 5_000,
+      cancelable: true
+    }],
+    async execute(name, args, context) {
+      return {
+        status: "completed",
+        content: JSON.stringify({ name, args, workspace: context.workspace }),
+        details: { name, args, workspace: context.workspace }
+      };
+    }
+  };
+  const providerTool = new AgentTool({
+    workspace,
+    tools: ["provider_echo"],
+    toolProviders: [provider]
+  });
+  const providerRuntime = await providerTool.createServer({ config: { ...config, port: 0 } });
+  const providerServer = await providerRuntime.listen();
+  try {
+    const providerManifest = await getJson(`${providerServer.url}/api/tools/manifest`);
+    assert.deepEqual(providerManifest.tools.map((tool) => tool.name), ["provider_echo"]);
+    const providerResult = await postJson(`${providerServer.url}/api/tools/call`, {
+      schemaVersion: "agent-cli-tool.call.v1",
+      toolCallId: "server-provider-call",
+      toolName: "provider_echo",
+      arguments: { value: "ok" },
+      workspace: { root: workspace }
+    });
+    assert.equal(providerResult.status, "completed");
+    assert.equal(providerResult.details.workspace, workspace);
+  } finally {
+    await providerRuntime.close();
+    await providerTool.dispose();
   }
 } finally {
   await runtime.close();

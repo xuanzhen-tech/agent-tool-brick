@@ -5,6 +5,7 @@
 相关边界文档：
 
 - [Memory Tool Boundary](docs/memory-tool-boundary.md)
+- [Tool Provider 对接合同](docs/tool-provider-contract.md)
 
 ## 能力边界
 
@@ -24,6 +25,8 @@
 - 通过注入的 `python-runtime` 支持 Python-backed 本地工具执行
 - 透传产品注入的 Node 包环境，让 `run_shell` / `exec_command` 可以使用产品组装的能力
 - 通过注入的 `playwright-browsers` 为子进程设置 Playwright Chromium 缓存路径
+- 内置但按需选择的 `visualization_create_chart` 和 `visualization_create_dashboard`
+- 通过 `toolProviders` 组合演示文稿等复杂能力，而不让 AgentCli 感知内部实现
 
 本积木不负责：
 
@@ -86,6 +89,22 @@ const agent = new AgentCli({
 ```
 
 `agentTool.definitions` 返回面向模型的 OpenAI-compatible tool schemas。`agentTool.execute(name, args, context)` 执行指定工具，并把持续终端会话保存在当前 `AgentTool` 实例内。注入完整 `AgentSkill` 对象后，`skill_find`、`skill_activate` 和 `skill_resource` 会暴露给模型；它们分别委托该对象完成本地/远端 skill 查找、激活，以及 skill 包资源的受控访问。
+
+默认构造 `new AgentTool()` 保持既有工具集合。产品需要启用新增预制工具或复杂 Provider 时，
+显式传 `tools` 白名单；列表以外的工具不会进入模型 schema：
+
+```js
+const agentTool = new AgentTool({
+  workspace,
+  runtimeDependencies,
+  tools: ["run_shell", "visualization_create_chart", "visualization_create_dashboard"]
+});
+```
+
+图表工具真实生成 Vega-Lite JSON、SVG、PNG 和 manifest；看板工具真实生成结构化 JSON、
+HTML、图表文件和 manifest。所有正式文件固定写到 `outputs/visualizations/`，并通过
+`agent-output.v1` 交给 `AgentCli` 与产品 GUI。外部 PPT 等复杂能力则以 `toolProviders`
+接入，完整合同见 [Tool Provider 对接合同](docs/tool-provider-contract.md)。
 
 `web_search`、`web_fetch` 和 `email_send` 默认通过固定 Server Tool Gateway 转发。Tavily key、SMTP host、SMTP username/password 都只配置在服务器上，产品仓库和 `AgentTool` 构造函数不接收这些密钥。`email_send` 的附件仍由本地 `AgentTool` 读取 workspace 内文件并做大小/路径校验，然后把文件内容随请求交给服务器发送。
 
@@ -218,6 +237,14 @@ npm run release:local
 ```
 
 `release:local` 覆盖命令入口 smoke、contract smoke、tool smoke、server smoke、artifact 构建、descriptor 生成、placeholder publish、verify 和 package 形状。
+
+可视化与编排器的跨仓库联调可额外执行：
+
+```bash
+npm run smoke:agent-cli-integration
+```
+
+该 smoke 需要本机存在同级 `agent-cli-brick` 仓库，或通过 `AGENT_CLI_REPO` 指定其位置。它会真实生成结构化 BI 看板，确认 `AgentCli` 收到 `agent_output`、thread transcript 可回放，并且下一轮模型上下文只含产物摘要。
 
 ## 产物
 

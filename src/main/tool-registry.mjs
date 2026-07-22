@@ -14,6 +14,8 @@ import {
   SKILL_ACTIVATE_TOOL,
   SKILL_FIND_TOOL,
   SKILL_RESOURCE_TOOL,
+  VISUALIZATION_CREATE_CHART_TOOL,
+  VISUALIZATION_CREATE_DASHBOARD_TOOL,
   WEB_FETCH_TOOL,
   WEB_SEARCH_TOOL,
   WRITE_STDIN_TOOL,
@@ -26,6 +28,8 @@ import { executeSkillResource } from "./skill-resource-runtime.mjs";
 import { createTerminalSessionManager } from "./terminal-runtime.mjs";
 import { compressToolExecutionResult } from "./tool-result-compression.mjs";
 import { executeWebFetch, executeWebSearch, isWebProviderAvailable } from "./web-runtime.mjs";
+import { executeVisualizationCreateChart, executeVisualizationCreateDashboard } from "./visualization-runtime.mjs";
+import { getProviderToolAvailability, isToolRequested, normalizeSelectedTools, normalizeToolProviders } from "./tool-provider.mjs";
 
 export async function createToolRegistry(config, options = {}) {
   const rgAvailability = await isRgAvailable(config.rgBin);
@@ -33,51 +37,71 @@ export async function createToolRegistry(config, options = {}) {
   const webAvailability = isWebProviderAvailable(config);
   const emailAvailability = isEmailProviderAvailable(config);
   const terminalManager = options.terminalManager ?? createTerminalSessionManager(config);
+  const selectedTools = normalizeSelectedTools(options.selectedTools);
+  const providerEntries = options.providerEntries ?? normalizeToolProviders(options.toolProviders);
   const tools = [];
   const executors = new Map();
 
+  const addTool = (tool, executor, available = true) => {
+    if (!available || !isToolRequested(tool.name, selectedTools, tool.defaultVisible !== false)) return;
+    if (executors.has(tool.name)) throw new Error(`重复的工具名称: ${tool.name}`);
+    tools.push(tool);
+    executors.set(tool.name, executor);
+  };
+
   if (config.processExecEnabled !== false) {
-    tools.push(RUN_SHELL_TOOL, EXEC_COMMAND_TOOL, WRITE_STDIN_TOOL);
-    executors.set(RUN_SHELL_TOOL.name, executeRunShell);
-    executors.set(EXEC_COMMAND_TOOL.name, (call, currentConfig, signal) => terminalManager.execCommand(call, currentConfig, signal));
-    executors.set(WRITE_STDIN_TOOL.name, (call, currentConfig, signal) => terminalManager.writeStdin(call, currentConfig, signal));
+    addTool(RUN_SHELL_TOOL, executeRunShell);
+    addTool(EXEC_COMMAND_TOOL, (call, currentConfig, signal) => terminalManager.execCommand(call, currentConfig, signal));
+    addTool(WRITE_STDIN_TOOL, (call, currentConfig, signal) => terminalManager.writeStdin(call, currentConfig, signal));
   }
 
   if (rgAvailability.available) {
-    tools.push(WORKSPACE_SEARCH_TOOL);
-    executors.set(WORKSPACE_SEARCH_TOOL.name, executeWorkspaceSearch);
+    addTool(WORKSPACE_SEARCH_TOOL, executeWorkspaceSearch);
   }
 
   // skill 的远端搜索、安装、索引刷新都属于 AgentSkill。HTTP 服务只有在
   // 显式注入该对象时才暴露 skill 工具，避免 index-only 兼容路径承诺不存在的能力。
   if (skillRuntime) {
-    tools.push(SKILL_FIND_TOOL, SKILL_ACTIVATE_TOOL);
-    executors.set(SKILL_FIND_TOOL.name, (call, _currentConfig, signal) => executeInjectedSkillFind(call, skillRuntime, signal));
-    executors.set(SKILL_ACTIVATE_TOOL.name, (call, _currentConfig, signal) => executeInjectedSkillActivate(call, skillRuntime, signal));
+    addTool(SKILL_FIND_TOOL, (call, _currentConfig, signal) => executeInjectedSkillFind(call, skillRuntime, signal));
+    addTool(SKILL_ACTIVATE_TOOL, (call, _currentConfig, signal) => executeInjectedSkillActivate(call, skillRuntime, signal));
     if (hasSkillResourceApi(skillRuntime)) {
-      tools.push(SKILL_RESOURCE_TOOL);
-      executors.set(SKILL_RESOURCE_TOOL.name, (call, _currentConfig, signal) => executeInjectedSkillResource(call, skillRuntime, signal));
+      addTool(SKILL_RESOURCE_TOOL, (call, _currentConfig, signal) => executeInjectedSkillResource(call, skillRuntime, signal));
     }
   }
 
   if (webAvailability.available) {
-    tools.push(WEB_SEARCH_TOOL, WEB_FETCH_TOOL);
-    executors.set(WEB_SEARCH_TOOL.name, executeWebSearch);
-    executors.set(WEB_FETCH_TOOL.name, executeWebFetch);
+    addTool(WEB_SEARCH_TOOL, executeWebSearch);
+    addTool(WEB_FETCH_TOOL, executeWebFetch);
   }
 
   if (emailAvailability.available) {
-    tools.push(EMAIL_SEND_TOOL);
-    executors.set(EMAIL_SEND_TOOL.name, executeEmailSend);
+    addTool(EMAIL_SEND_TOOL, executeEmailSend);
+  }
+
+  addTool(VISUALIZATION_CREATE_CHART_TOOL, executeVisualizationCreateChart);
+  addTool(VISUALIZATION_CREATE_DASHBOARD_TOOL, executeVisualizationCreateDashboard);
+
+  for (const providerEntry of providerEntries) {
+    for (const descriptor of providerEntry.descriptors) {
+      const availability = getProviderToolAvailability(providerEntry, descriptor);
+      addTool(descriptor, (call, currentConfig, signal) => providerEntry.provider.execute(call.toolName, call.arguments ?? {}, {
+        workspace: call.workspace?.root,
+        toolCallId: call.toolCallId,
+        signal,
+        config: currentConfig
+      }), availability.available);
+    }
   }
 
   return {
     tools,
-    manifest: createAgentToolManifest({
-      version: brickDefinition.version,
-      config,
-      tools
-    }),
+    get manifest() {
+      // write_stdin 只有存在运行中会话时才向 HTTP 客户端暴露，和对象模式一致。
+      const manifestTools = terminalManager.stats().running > 0
+        ? tools
+        : tools.filter((tool) => tool.name !== WRITE_STDIN_TOOL.name);
+      return createAgentToolManifest({ version: brickDefinition.version, config, tools: manifestTools });
+    },
     has(name) {
       return executors.has(name);
     },

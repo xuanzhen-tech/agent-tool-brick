@@ -1,6 +1,6 @@
 {
   "name": "@xuanzhen-tech/agent-tool-brick",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Agent tool execution brick with a local tool service boundary.",
   "type": "module",
   "repository": {
@@ -31,7 +31,7 @@
     "publish:artifact": "node src/scripts/publish-artifact.mjs",
     "publish:artifact:placeholder": "node src/scripts/publish-artifact-placeholder.mjs",
     "publish:npm": "npm publish",
-    "release:local": "npm run smoke:cli && npm run smoke:contract && npm run smoke:tools && npm run smoke:server && npm run build:artifact && npm run create:descriptor && npm run publish:artifact:placeholder && npm run verify && npm run pack:dry-run",
+    "release:local": "npm run smoke:cli && npm run smoke:contract && npm run smoke:tools && npm run smoke:visualizations && npm run smoke:server && npm run build:artifact && npm run create:descriptor && npm run publish:artifact:placeholder && npm run verify && npm run pack:dry-run",
     "smoke:agent-cli-runtime-integration": "node src/scripts/smoke-agent-cli-runtime-integration.mjs",
     "smoke:agent-cli-gateway-kimi": "node src/scripts/smoke-agent-cli-gateway-kimi.mjs",
     "smoke:agent-cli-gateway-kimi-skill": "node src/scripts/smoke-agent-cli-gateway-kimi-skill.mjs",
@@ -41,13 +41,18 @@
     "smoke:cli": "node src/cli.mjs version && node src/cli.mjs health --json && node src/cli.mjs diagnostics --json && node src/cli.mjs manifest --json",
     "smoke:contract": "node src/scripts/smoke-contract.mjs",
     "smoke:server": "node src/scripts/smoke-server.mjs",
+    "smoke:agent-cli-integration": "node scripts/smoke-visualization-agent-integration.mjs",
     "smoke:tools": "node src/scripts/smoke-tools.mjs",
+    "smoke:visualizations": "node src/scripts/smoke-visualizations.mjs",
     "verify": "node src/scripts/verify.mjs"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "@xuanzhen-tech/agent-release-foundation": "0.0.6"
+    "@resvg/resvg-js": "2.6.2",
+    "@xuanzhen-tech/agent-release-foundation": "0.0.6",
+    "vega": "5.33.0",
+    "vega-lite": "5.21.0"
   }
 }

@@ -34,7 +34,7 @@ import { createToolResult } from "../main/tool-contract.mjs";
 
 assert.equal(brickDefinition.id, "agent-tool");
 assert.equal(brickDefinition.kind, "tool");
-assert.equal(brickDefinition.version, "0.3.0");
+assert.equal(brickDefinition.version, "0.4.0");
 assert.equal(validateBrickDefinition(brickDefinition).ok, true);
 assert.equal(brickDefinition.runtimeDependencies.some((item) => item.type === "node-runtime" && item.required === true), true);
 assert.equal(brickDefinition.runtimeDependencies.some((item) => item.slot === "tool:rg" && item.required === false), true);
@@ -48,6 +48,9 @@ assert.equal(brickDefinition.capabilities.some((item) => item.id === "agent-tool
 assert.equal(brickDefinition.capabilities.some((item) => item.id === "agent-tool.python-runtime"), true);
 assert.equal(brickDefinition.capabilities.some((item) => item.id === "agent-tool.node-package-runtime"), true);
 assert.equal(brickDefinition.capabilities.some((item) => item.id === "agent-tool.playwright-browsers-env"), true);
+assert.equal(brickDefinition.capabilities.some((item) => item.id === "agent-tool.data-visualization"), true);
+assert.equal(brickDefinition.capabilities.some((item) => item.id === "agent-tool.structured-dashboard"), true);
+assert.equal(brickDefinition.capabilities.some((item) => item.id === "agent-tool.provider-composition"), true);
 
 const launchConfig = createAgentToolLaunchConfig({
   port: 8791,
@@ -106,8 +109,51 @@ assert.equal(agentTool.definitions.some((tool) => tool.function?.name === "works
 assert.equal(agentTool.definitions.some((tool) => tool.function?.name === "skill_find"), true);
 assert.equal(agentTool.definitions.some((tool) => tool.function?.name === "skill_activate"), true);
 assert.equal(agentTool.definitions.some((tool) => tool.function?.name === "skill_resource"), false);
+assert.equal(agentTool.definitions.some((tool) => tool.function?.name === "visualization_create_chart"), false);
+assert.equal(agentTool.definitions.some((tool) => tool.function?.name === "visualization_create_dashboard"), false);
 assert.equal((await agentTool.execute("skill_find", JSON.stringify({ query: "demo" }))).details.skills[0].name, "demo");
 await agentTool.dispose();
+
+// 新增预制工具必须由产品显式选择，不能改变既有 new AgentTool() 的模型工具面。
+const selectedTool = new AgentTool({
+  workspace: process.cwd(),
+  tools: ["run_shell", "visualization_create_chart", "visualization_create_dashboard"]
+});
+assert.deepEqual(
+  selectedTool.definitions.map((tool) => tool.function?.name).sort(),
+  ["run_shell", "visualization_create_chart", "visualization_create_dashboard"].sort()
+);
+await selectedTool.dispose();
+
+const provider = {
+  id: "contract-provider",
+  toolDescriptors: [{
+    name: "provider_echo",
+    description: "Provider contract echo.",
+    schema: {
+      type: "function",
+      function: {
+        name: "provider_echo",
+        description: "Provider contract echo.",
+        parameters: { type: "object", additionalProperties: false }
+      }
+    },
+    permissions: [],
+    timeoutMs: 5_000,
+    cancelable: true
+  }],
+  async execute(name, args) {
+    return { status: "completed", content: JSON.stringify({ name, args }), details: { name, args } };
+  }
+};
+const providerTool = new AgentTool({
+  workspace: process.cwd(),
+  tools: ["provider_echo"],
+  toolProviders: [provider]
+});
+assert.equal(providerTool.definitions.some((tool) => tool.function?.name === "provider_echo"), true);
+assert.equal((await providerTool.execute("provider_echo", { value: "ok" })).details.name, "provider_echo");
+await providerTool.dispose();
 
 const playwrightAwareTool = new AgentTool({
   workspace: process.cwd(),
@@ -117,7 +163,7 @@ const playwrightAwareTool = new AgentTool({
   ]
 });
 const playwrightShellSchema = playwrightAwareTool.definitions.find((tool) => tool.function?.name === "run_shell");
-assert.match(playwrightShellSchema.function.description, /Product-injected Node packages.*playwright/);
+assert.match(playwrightShellSchema.function.description, /产品注入的 Node 包.*playwright/);
 assert.match(playwrightShellSchema.function.description, /PLAYWRIGHT_BROWSERS_PATH/);
 await playwrightAwareTool.dispose();
 
