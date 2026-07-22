@@ -63,6 +63,9 @@ jobs:
           node --check src/main/tool-definitions.mjs
           node --check src/main/tool-provider.mjs
           node --check src/main/tool-registry.mjs
+          node --check src/main/vega-runtime.mjs
+          node --check src/main/vendor/vega-6.3.0.cjs
+          node --check src/main/vendor/vega-lite-6.4.3.cjs
           node --check src/main/visualization-runtime.mjs
           node --check src/main/workspace.mjs
           node --check src/main/web-runtime.mjs

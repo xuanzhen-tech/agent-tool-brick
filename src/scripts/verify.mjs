@@ -63,6 +63,9 @@ function validatePackageJson(packageJson) {
   if (!packageJson.dependencies?.["@xuanzhen-tech/agent-release-foundation"]) {
     errors.push("baseLine dependency is required");
   }
+  if (packageJson.dependencies?.vega || packageJson.dependencies?.["vega-lite"]) {
+    errors.push("Vega runtime must be provided by the verified vendor bundle, not npm dependencies");
+  }
   return errors;
 }
 
@@ -128,8 +131,11 @@ async function validateRuntimeArtifactIfPresent() {
     "src/main/web-runtime.mjs",
     "src/main/tool-provider.mjs",
     "src/main/visualization-runtime.mjs",
-    "node_modules/vega/package.json",
-    "node_modules/vega-lite/package.json",
+    "src/main/vega-runtime.mjs",
+    "src/main/vendor/vega-6.3.0.cjs",
+    "src/main/vendor/vega-lite-6.4.3.cjs",
+    "src/main/vendor/vendor-manifest.json",
+    "src/main/vendor/THIRD_PARTY_NOTICES.md",
     "node_modules/@resvg/resvg-js/package.json"
   ];
   for (const requiredFile of requiredFiles) {
@@ -180,7 +186,33 @@ async function validateRuntimeArtifactIfPresent() {
   }
 
   await assertRuntimeFilesDoNotContainSecrets(runtimeFiles);
+  await assertVendoredVisualizationRuntime(runtimeFiles);
   console.log("[verify] runtime artifact ok", metadata.artifactFileName);
+}
+
+/**
+ * 校验 artifact 中的静态 Vega 运行时与清单一致。
+ *
+ * 图表渲染需要确定的本地 bundle；这一步防止构建过程中误打包了错误版本、被替换的
+ * 文件或缺失许可证/来源记录的第三方代码。
+ */
+async function assertVendoredVisualizationRuntime(runtimeFiles) {
+  const manifestPath = path.join(runtimeDir, "src", "main", "vendor", "vendor-manifest.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  if (manifest.schemaVersion !== "agent-tool.vendor.v1" || !Array.isArray(manifest.runtimes)) {
+    throw new Error("Vendored visualization runtime manifest is invalid");
+  }
+  for (const runtime of manifest.runtimes) {
+    const relativePath = `src/main/vendor/${runtime.file}`;
+    if (!runtimeFiles.includes(relativePath)) {
+      throw new Error(`Runtime artifact is missing vendored visualization file ${relativePath}`);
+    }
+    const content = await fs.readFile(path.join(runtimeDir, ...relativePath.split("/")));
+    const actualSha = crypto.createHash("sha256").update(content).digest("hex");
+    if (actualSha !== runtime.vendoredSha256) {
+      throw new Error(`Vendored visualization file hash does not match manifest: ${runtime.file}`);
+    }
+  }
 }
 
 async function assertRuntimeFilesDoNotContainSecrets(runtimeFiles) {

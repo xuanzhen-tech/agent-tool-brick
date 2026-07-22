@@ -1,0 +1,30 @@
+{
+  "schemaVersion": "agent-tool.vendor.v1",
+  "description": "agent-tool 可视化运行时使用的静态第三方构建文件清单。所有文件均来自对应官方源码标签的构建产物，并在发布前校验哈希。",
+  "runtimes": [
+    {
+      "id": "vega",
+      "version": "6.3.0",
+      "license": "BSD-3-Clause",
+      "sourceRepository": "https://github.com/vega/vega",
+      "sourceTag": "v6.3.0",
+      "file": "vega-6.3.0.cjs",
+      "upstreamSha256": "748b0e95619e545314d249f44e9b7354045d3c3139b04bc59675db407dc804e4",
+      "vendoredSha256": "748b0e95619e545314d249f44e9b7354045d3c3139b04bc59675db407dc804e4",
+      "modifications": []
+    },
+    {
+      "id": "vega-lite",
+      "version": "6.4.3",
+      "license": "BSD-3-Clause",
+      "sourceRepository": "https://github.com/vega/vega-lite",
+      "sourceTag": "v6.4.3",
+      "file": "vega-lite-6.4.3.cjs",
+      "upstreamSha256": "35a9821df838825b05a6a73e9414b58747a1b18321583858ed903c66393a5c7e",
+      "vendoredSha256": "907f638c529789ec1aaef7026ef60b6968518081e0a8f94df8a74b47a2d038cd",
+      "modifications": [
+        "仅将 CommonJS 的 require(\"vega\") 改为 require(\"./vega-6.3.0.cjs\")，使其只解析同目录中经过校验的静态 Vega bundle；未改变渲染逻辑。"
+      ]
+    }
+  ]
+}

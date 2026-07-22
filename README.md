@@ -103,8 +103,10 @@ const agentTool = new AgentTool({
 
 图表工具真实生成 Vega-Lite JSON、SVG、PNG 和 manifest；看板工具真实生成结构化 JSON、
 HTML、图表文件和 manifest。所有正式文件固定写到 `outputs/visualizations/`，并通过
-`agent-output.v1` 交给 `AgentCli` 与产品 GUI。外部 PPT 等复杂能力则以 `toolProviders`
-接入，完整合同见 [Tool Provider 对接合同](docs/tool-provider-contract.md)。
+`agent-output.v1` 交给 `AgentCli` 与产品 GUI。图表渲染固定使用随 SDK/artifact 发布的、
+可校验来源与哈希的 Vega 6.3.0 / Vega-Lite 6.4.3 静态 bundle，不会在运行时联网下载
+图表代码；详情见 [第三方运行时说明](src/main/vendor/THIRD_PARTY_NOTICES.md)。外部 PPT 等
+复杂能力则以 `toolProviders` 接入，完整合同见 [Tool Provider 对接合同](docs/tool-provider-contract.md)。
 
 `web_search`、`web_fetch` 和 `email_send` 默认通过固定 Server Tool Gateway 转发。Tavily key、SMTP host、SMTP username/password 都只配置在服务器上，产品仓库和 `AgentTool` 构造函数不接收这些密钥。`email_send` 的附件仍由本地 `AgentTool` 读取 workspace 内文件并做大小/路径校验，然后把文件内容随请求交给服务器发送。
 

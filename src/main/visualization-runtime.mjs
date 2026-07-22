@@ -12,8 +12,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import { Resvg } from "@resvg/resvg-js";
-import * as vega from "vega";
-import * as vegaLite from "vega-lite";
+import { getVegaRuntime } from "./vega-runtime.mjs";
 
 const MAX_INLINE_DATA_BYTES = 2 * 1024 * 1024;
 const MAX_DASHBOARD_PANELS = 12;
@@ -156,6 +155,7 @@ async function renderChartArtifact({ workspace, title, spec, data, signal }) {
 async function renderChartFiles({ directory, fileStem, title, spec, data, signal }) {
   throwIfAborted(signal);
   const normalizedSpec = normalizeVegaLiteSpec(spec, data, title);
+  const { vega, vegaLite } = getVegaRuntime();
   const compiled = vegaLite.compile(normalizedSpec).spec;
   const runtime = vega.parse(compiled);
   const view = new vega.View(runtime, { renderer: "none" });
@@ -266,7 +266,7 @@ function normalizeVegaLiteSpec(rawSpec, data, title) {
   } else {
     throw invalidInput("图表必须提供 data 或 spec.data.values。 ");
   }
-  spec.$schema = "https://vega.github.io/schema/vega-lite/v5.json";
+  spec.$schema = "https://vega.github.io/schema/vega-lite/v6.json";
   if (!spec.title) spec.title = title;
   if (!Number.isFinite(spec.width)) spec.width = DEFAULT_CHART_WIDTH;
   if (!Number.isFinite(spec.height)) spec.height = DEFAULT_CHART_HEIGHT;
