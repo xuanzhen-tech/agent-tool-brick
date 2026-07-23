@@ -23,7 +23,7 @@ import {
   WORKSPACE_SEARCH_TOOL
 } from "./tool-definitions.mjs";
 import { executeEmailSend, isEmailProviderAvailable } from "./email-runtime.mjs";
-import { executeImagePresent, isImagePresentProviderAvailable } from "./image-runtime.mjs";
+import { executeImagePresent, isImagePresentAvailable } from "./image-runtime.mjs";
 import { executeRunShell } from "./shell-runtime.mjs";
 import { executeWorkspaceSearch, isRgAvailable } from "./search-runtime.mjs";
 import { executeSkillResource } from "./skill-resource-runtime.mjs";
@@ -38,7 +38,7 @@ export async function createToolRegistry(config, options = {}) {
   const skillRuntime = normalizeSkillRuntime(options.skillRuntime);
   const webAvailability = isWebProviderAvailable(config);
   const emailAvailability = isEmailProviderAvailable(config);
-  const imagePresentAvailability = isImagePresentProviderAvailable(config);
+  const imagePresentAvailability = isImagePresentAvailable();
   const terminalManager = options.terminalManager ?? createTerminalSessionManager(config);
   const selectedTools = normalizeSelectedTools(options.selectedTools);
   const providerEntries = options.providerEntries ?? normalizeToolProviders(options.toolProviders);

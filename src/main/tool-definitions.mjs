@@ -503,15 +503,16 @@ export const EMAIL_SEND_TOOL = {
 export const IMAGE_PRESENT_TOOL = {
   name: "image_present",
   description: [
-    "把当前 workspace 中的 PNG/JPEG/WebP 图片呈递给服务端视觉模型观察，并返回可供下一步推理使用的观察结果。",
-    "适合渲染截图后检查页面、图表、PPT 页面或其他图片内容；它不是自动 QA 门禁，也不会修改文件。",
+    "把当前 workspace 中的 PNG/JPEG/WebP 图片呈递给用户，并生成图片 artifact。",
+    "当前模型是否能原生看图由 AgentCli 和 Gateway 的模型能力决定：支持视觉时，图片只会附在紧随的下一次模型请求中；不支持时，图片只展示给用户。本工具不调用其它模型生成文字描述。",
+    "适合呈递截图、图表、PPT 页面或其它图片产物；它不是自动 QA 门禁，也不会修改文件。",
     "path 使用 workspace 相对路径，例如 outputs/slide-01.png；不要用 run_shell 读取图片二进制内容。"
   ].join(" "),
   schema: {
     type: "function",
     function: {
       name: "image_present",
-      description: "呈递 workspace 内图片给视觉模型观察。返回观察文本，并生成 image artifact 供界面展示和后续上下文引用。",
+      description: "呈递 workspace 内图片给用户。返回 image artifact；支持原生视觉的当前模型会在下一次请求中直接收到图片，不支持时不会假装看到了图片。",
       parameters: {
         type: "object",
         additionalProperties: false,
@@ -520,17 +521,13 @@ export const IMAGE_PRESENT_TOOL = {
           path: {
             type: "string",
             description: "workspace 相对图片路径，例如 outputs/screenshot.png；也接受位于 workspace 内部的绝对路径。"
-          },
-          prompt: {
-            type: "string",
-            description: "可选观察重点，例如检查文字是否裁切、图表是否可读、页面是否和预期一致。"
           }
         }
       }
     }
   },
-  permissions: ["workspace.read", "network.vision.present"],
-  timeoutMs: 60_000,
+  permissions: ["workspace.read"],
+  timeoutMs: 10_000,
   cancelable: true
 };
 

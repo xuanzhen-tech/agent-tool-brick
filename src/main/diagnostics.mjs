@@ -12,7 +12,7 @@ import { promisify } from "node:util";
 import { brickDefinition } from "../brick-definition.mjs";
 import { isRgAvailable } from "./search-runtime.mjs";
 import { isEmailProviderAvailable } from "./email-runtime.mjs";
-import { isImagePresentProviderAvailable } from "./image-runtime.mjs";
+import { isImagePresentAvailable } from "./image-runtime.mjs";
 import { isWebProviderAvailable } from "./web-runtime.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -165,19 +165,19 @@ function createEmailProviderCheck(config) {
 }
 
 function createImagePresentProviderCheck(config) {
-  const availability = isImagePresentProviderAvailable(config);
+  const availability = isImagePresentAvailable();
   if (availability.available) {
     return {
       id: "tool.image_present",
       status: "pass",
-      summary: "image_present is exposed through the server tool gateway.",
+      summary: "image_present 在本地校验并呈递 workspace 图片。",
       detail: availability.detail
     };
   }
   return {
     id: "tool.image_present",
     status: "warn",
-    summary: "image_present is not exposed because the server tool gateway is not configured.",
+    summary: "image_present 当前不可用。",
     detail: availability.detail
   };
 }

@@ -35,7 +35,7 @@ import { createToolResult } from "../main/tool-contract.mjs";
 
 assert.equal(brickDefinition.id, "agent-tool");
 assert.equal(brickDefinition.kind, "tool");
-assert.equal(brickDefinition.version, "0.4.2");
+assert.equal(brickDefinition.version, "0.5.0");
 assert.equal(validateBrickDefinition(brickDefinition).ok, true);
 assert.equal(brickDefinition.runtimeDependencies.some((item) => item.type === "node-runtime" && item.required === true), true);
 assert.equal(brickDefinition.runtimeDependencies.some((item) => item.slot === "tool:rg" && item.required === false), true);
@@ -180,7 +180,9 @@ assert.equal(EMAIL_SEND_TOOL.schema.function.parameters.required.includes("to"),
 assert.equal(EMAIL_SEND_TOOL.schema.function.parameters.required.includes("subject"), true);
 assert.deepEqual(IMAGE_PRESENT_TOOL.schema.function.parameters.required, ["path"]);
 assert.equal(IMAGE_PRESENT_TOOL.schema.function.parameters.additionalProperties, false);
-assert.match(IMAGE_PRESENT_TOOL.description, /视觉模型/);
+assert.equal("prompt" in IMAGE_PRESENT_TOOL.schema.function.parameters.properties, false);
+assert.match(IMAGE_PRESENT_TOOL.description, /原生看图/);
+assert.match(IMAGE_PRESENT_TOOL.description, /不调用其它模型生成文字描述/);
 assert.match(IMAGE_PRESENT_TOOL.description, /workspace 相对路径/);
 
 const manifest = createAgentToolManifest({

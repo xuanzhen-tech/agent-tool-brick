@@ -16,7 +16,7 @@ import { fileURLToPath } from "node:url";
 
 const BRICK_ID = "agent-tool";
 const BRICK_NAME = "Agent Tool";
-const BRICK_VERSION = "0.4.2";
+const BRICK_VERSION = "0.5.0";
 const BRICK_KIND = "tool";
 
 const toolServiceCapability = createBrickCapability({
@@ -83,8 +83,8 @@ const imagePresentCapability = createBrickCapability({
   id: "agent-tool.image-present",
   name: "Image Present Tool",
   type: "tool",
-  description: "Presents workspace images to the server-side vision gateway and returns model-readable observations plus image artifacts.",
-  requires: ["node-runtime", "server-tool-gateway"],
+  description: "在本地校验并呈递 workspace 图片 artifact；AgentCli 可在视觉模型的下一次请求中注入原生图片。",
+  requires: ["node-runtime"],
   optional: true
 });
 

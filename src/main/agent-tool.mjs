@@ -10,7 +10,7 @@
 import { brickDefinition } from "../brick-definition.mjs";
 import { createDiagnosticsReport } from "./diagnostics.mjs";
 import { isEmailProviderAvailable } from "./email-runtime.mjs";
-import { isImagePresentProviderAvailable } from "./image-runtime.mjs";
+import { isImagePresentAvailable } from "./image-runtime.mjs";
 import { resolveServiceConfig } from "./launch-config.mjs";
 import { createRuntimeDependencyConfig } from "./runtime-dependency-config.mjs";
 import { createTerminalSessionManager } from "./terminal-runtime.mjs";
@@ -203,7 +203,7 @@ function selectModelToolSchemas({ config, runtimeDependencies, skillRuntime, ter
     add(WEB_FETCH_TOOL);
   }
   add(EMAIL_SEND_TOOL, isEmailProviderAvailable(config).available);
-  add(IMAGE_PRESENT_TOOL, isImagePresentProviderAvailable(config).available);
+  add(IMAGE_PRESENT_TOOL, isImagePresentAvailable().available);
   add(VISUALIZATION_CREATE_CHART_TOOL);
   add(VISUALIZATION_CREATE_DASHBOARD_TOOL);
 

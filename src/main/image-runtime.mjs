@@ -2,19 +2,16 @@
  * 【文件说明】
  * 本文件实现通用图片呈递工具。
  *
- * AgentTool 只读取当前 workspace 内的图片并转发给服务端 Gateway；视觉模型、
- * provider key 和模型路由都留在服务器。工具返回观察文本给模型，同时返回
- * agent-output.v1 图片 artifact，供 AgentCli 和产品界面展示。
+ * AgentTool 只读取当前 workspace 内的图片并生成受控 artifact。它不调用视觉
+ * provider，也不把图片转成文字描述；当前 Agent 模型是否能原生看图由 AgentCli
+ * 根据 Gateway 的模型能力目录决定。
  */
 
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { isServerToolGatewayAvailable, postServerToolGatewayJson } from "./server-tool-gateway.mjs";
-
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
-const MAX_PROMPT_CHARS = 4_000;
 const MIME_BY_EXTENSION = new Map([
   [".png", "image/png"],
   [".jpg", "image/jpeg"],
@@ -22,8 +19,8 @@ const MIME_BY_EXTENSION = new Map([
   [".webp", "image/webp"]
 ]);
 
-export function isImagePresentProviderAvailable(config) {
-  return isServerToolGatewayAvailable(config);
+export function isImagePresentAvailable() {
+  return { available: true, detail: "image_present 在本地校验并呈递 workspace 图片。" };
 }
 
 export async function executeImagePresent(call, config, signal) {
@@ -33,44 +30,21 @@ export async function executeImagePresent(call, config, signal) {
   const image = await readWorkspaceImage({ workspace, requestedPath: input.path });
   throwIfAborted(signal);
 
-  const response = await postServerToolGatewayJson(config, "/api/tools/image/present", {
-    path: image.workspacePath,
-    mimeType: image.mimeType,
-    contentBase64: image.buffer.toString("base64"),
-    contentHash: image.contentHash,
-    prompt: input.prompt
-  }, signal);
-  const observation = typeof response.observation === "string" ? response.observation.trim() : "";
-  if (!observation) {
-    return failedResult(call, "image_present_empty_observation", "视觉模型没有返回可用观察结果。");
-  }
-
-  const artifact = createImagePresentArtifact({
-    image,
-    observation,
-    modelId: response.modelId,
-    provider: response.provider,
-    model: response.model,
-    prompt: input.prompt
-  });
+  const artifact = createImagePresentArtifact({ image });
 
   return {
     status: "completed",
     content: [
-      "图片已呈递给视觉模型。",
+      "图片已呈递给用户。",
       `图片：${image.workspacePath}`,
-      `观察结果：\n${observation}`
+      "如果当前模型支持原生视觉输入，AgentCli 会仅在紧随的下一次模型请求中附上该图片；本工具不会生成图片文字描述。"
     ].join("\n"),
     details: {
       imagePresent: {
         path: image.workspacePath,
         mimeType: image.mimeType,
         bytes: image.bytes,
-        contentHash: image.contentHash,
-        modelId: response.modelId,
-        provider: response.provider,
-        model: response.model,
-        observation
+        contentHash: image.contentHash
       }
     },
     artifacts: [artifact]
@@ -82,8 +56,7 @@ function normalizeImagePresentInput(input) {
   const imagePath = normalizeNonEmptyText(input.path);
   if (!imagePath) throw invalidInput("image_present 需要 path。");
   return {
-    path: imagePath,
-    prompt: normalizeOptionalText(input.prompt, MAX_PROMPT_CHARS)
+    path: imagePath
   };
 }
 
@@ -106,7 +79,7 @@ async function readWorkspaceImage({ workspace, requestedPath }) {
     throw invalidInput(`无法读取图片文件：${formatError(error)}`);
   });
   if (!buffer.byteLength) throw invalidInput("图片文件为空。");
-  if (buffer.byteLength > MAX_IMAGE_BYTES) throw invalidInput("图片超过 10MB，无法呈递给视觉模型。");
+  if (buffer.byteLength > MAX_IMAGE_BYTES) throw invalidInput("图片超过 10MB，无法呈递。");
   const workspacePath = toWorkspacePath(workspace, absolutePath);
   return {
     absolutePath,
@@ -132,50 +105,26 @@ function resolveInsideWorkspace(workspace, requestedPath) {
   return absolutePath;
 }
 
-function createImagePresentArtifact({ image, observation, modelId, provider, model, prompt }) {
+function createImagePresentArtifact({ image }) {
   const id = `image-present-${image.contentHash.slice(0, 12)}`;
   return {
     schemaVersion: "agent-output.v1",
     kind: "image",
     renderer: "image-present",
     id,
-    title: `图片观察：${path.basename(image.workspacePath)}`,
+    title: `图片呈递：${path.basename(image.workspacePath)}`,
     files: [{
       path: image.workspacePath,
       mimeType: image.mimeType,
       bytes: image.bytes
     }],
     data: {
-      schemaVersion: "agent-image-present.v1",
+      schemaVersion: "agent-image-present.v2",
       path: image.workspacePath,
       mimeType: image.mimeType,
       bytes: image.bytes,
-      contentHash: image.contentHash,
-      modelId,
-      provider,
-      model,
-      prompt,
-      observation
+      contentHash: image.contentHash
     }
-  };
-}
-
-function failedResult(call, code, message) {
-  return {
-    status: "failed",
-    content: message,
-    details: {
-      imagePresent: {
-        failed: true,
-        reasonCode: code,
-        reason: message
-      }
-    },
-    error: {
-      code,
-      message
-    },
-    toolCallId: call?.toolCallId
   };
 }
 
@@ -185,11 +134,6 @@ function toWorkspacePath(workspace, absolutePath) {
 
 function normalizeNonEmptyText(value) {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
-function normalizeOptionalText(value, maxChars) {
-  const text = normalizeNonEmptyText(value);
-  return text ? text.slice(0, maxChars) : undefined;
 }
 
 function isRecord(value) {
