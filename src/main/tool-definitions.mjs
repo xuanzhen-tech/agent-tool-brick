@@ -336,12 +336,12 @@ export const SKILL_ACTIVATE_TOOL = {
 
 export const SKILL_RESOURCE_TOOL = {
   name: "skill_resource",
-  description: "受控读取已激活 skill 的 reference，或将其 asset 复制到固定的 workspace 临时目录。",
+  description: "受控读取已激活 skill 的 reference/workflow，或将其 asset/template 复制到固定的 workspace 临时目录。",
   schema: {
     type: "function",
     function: {
       name: "skill_resource",
-      description: "只能访问已安装 skill 包中的 resources。action=read_reference 只接受 references/... 的 UTF-8 文本并返回专门上下文；action=copy_asset 只接受 assets/...，会自动复制到 workspace 的 temp/skill-assets/ 固定路径。不要传目标路径，不要用它读取 scripts 或任意工作区文件。",
+      description: "只能访问已安装 skill 包中的 resources。action=read_reference 接受 references/... 或 workflows/... 的 UTF-8 文本并返回专门上下文；action=copy_asset 接受 assets/... 或 templates/...，会自动复制到 workspace 的 temp/skill-assets/ 固定路径。不要传目标路径，不要用它读取 scripts 或任意工作区文件。",
       parameters: {
         type: "object",
         additionalProperties: false,
@@ -350,7 +350,7 @@ export const SKILL_RESOURCE_TOOL = {
           action: {
             type: "string",
             enum: ["read_reference", "copy_asset"],
-            description: "read_reference 读取 references/...；copy_asset 物化 assets/... 到固定临时目录。"
+            description: "read_reference 读取 references/... 或 workflows/...；copy_asset 物化 assets/... 或 templates/... 到固定临时目录。"
           },
           skill: {
             type: "string",
@@ -358,7 +358,7 @@ export const SKILL_RESOURCE_TOOL = {
           },
           path: {
             type: "string",
-            description: "skill 包内相对路径：read_reference 使用 references/...，copy_asset 使用 assets/...；禁止绝对路径和 ..。"
+            description: "skill 包内相对路径：read_reference 使用 references/... 或 workflows/...，copy_asset 使用 assets/... 或 templates/...；禁止绝对路径和 ..。"
           }
         }
       }

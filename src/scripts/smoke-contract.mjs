@@ -35,7 +35,7 @@ import { createToolResult } from "../main/tool-contract.mjs";
 
 assert.equal(brickDefinition.id, "agent-tool");
 assert.equal(brickDefinition.kind, "tool");
-assert.equal(brickDefinition.version, "0.5.0");
+assert.equal(brickDefinition.version, "0.5.1");
 assert.equal(validateBrickDefinition(brickDefinition).ok, true);
 assert.equal(brickDefinition.runtimeDependencies.some((item) => item.type === "node-runtime" && item.required === true), true);
 assert.equal(brickDefinition.runtimeDependencies.some((item) => item.slot === "tool:rg" && item.required === false), true);
