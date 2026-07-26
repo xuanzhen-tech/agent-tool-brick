@@ -134,6 +134,21 @@ function resolveProcessExecutable(executable, config = {}) {
 
 export function buildShellCommandSpec(command) {
   if (process.platform === "win32") {
+    const strictCommand = [
+      "$ErrorActionPreference = 'Stop'",
+      "$utf8 = [System.Text.UTF8Encoding]::new($false)",
+      "[Console]::OutputEncoding = $utf8",
+      "$OutputEncoding = $utf8",
+      "try {",
+      "  & {",
+      command,
+      "  }",
+      "  if ($LASTEXITCODE -ne $null -and $LASTEXITCODE -ne 0) { exit $LASTEXITCODE }",
+      "} catch {",
+      "  [Console]::Error.WriteLine($_.Exception.Message)",
+      "  exit 1",
+      "}"
+    ].join("\n");
     return {
       executable: "powershell.exe",
       args: [
@@ -142,7 +157,7 @@ export function buildShellCommandSpec(command) {
         "-ExecutionPolicy",
         "Bypass",
         "-Command",
-        `$utf8 = [System.Text.UTF8Encoding]::new($false); [Console]::OutputEncoding = $utf8; $OutputEncoding = $utf8; ${command}`
+        strictCommand
       ]
     };
   }

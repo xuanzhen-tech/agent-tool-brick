@@ -155,6 +155,24 @@ assert.equal(nonzero.status, "failed");
 assert.equal(nonzero.details.exitCode, 7);
 assert.match(nonzero.error.message, /未验证执行成功/);
 
+// Windows PowerShell 管道可能吞掉原生命令退出码；run_shell 必须仍然报告失败。
+if (process.platform === "win32") {
+  const pipedNativeFailure = await registry.execute({
+    schemaVersion: "agent-cli-tool.call.v1",
+    toolCallId: "call-piped-native-failure",
+    toolName: "run_shell",
+    arguments: {
+      mode: "shell",
+      command: `& '${escapePowerShellSingleQuoted(process.execPath)}' -e "process.exit(23)" 2>&1 | Out-String; echo '后续 PowerShell 命令仍会执行'`
+    },
+    workspace: { root: workspace },
+    limits: { timeoutMs: 5_000, maxOutputChars: 8_000 }
+  });
+  assert.equal(pipedNativeFailure.status, "failed");
+  assert.equal(pipedNativeFailure.details.exitCode, 23);
+  assert.match(pipedNativeFailure.details.stdout, /后续 PowerShell 命令仍会执行/);
+}
+
 const timeout = await registry.execute({
   schemaVersion: "agent-cli-tool.call.v1",
   toolCallId: "call-timeout",
@@ -718,6 +736,10 @@ async function pollTerminalUntilClosed(registry, sessionId, workspace, maxPolls 
 
 function escapeRegExp(value) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function escapePowerShellSingleQuoted(value) {
+  return String(value).replaceAll("'", "''");
 }
 
 async function pathExists(targetPath) {
