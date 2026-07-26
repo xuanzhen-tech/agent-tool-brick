@@ -23,6 +23,7 @@
 - 通过服务端 Tool Gateway 暴露 `web_search` 和 `web_fetch`
 - 通过服务端 Tool Gateway 暴露 `email_send`
 - 本地呈递 `image_present` 图片 artifact；视觉模型直接接收原生图片内容
+- 内置但默认隐藏的电商生图、编辑、批次和资产历史工具
 - 通过注入的 `python-runtime` 支持 Python-backed 本地工具执行
 - 透传产品注入的 Node 包环境，让 `run_shell` / `exec_command` 可以使用产品组装的能力
 - 通过注入的 `playwright-browsers` 为子进程设置 Playwright Chromium 缓存路径
@@ -101,6 +102,49 @@ const agentTool = new AgentTool({
   tools: ["run_shell", "visualization_create_chart", "visualization_create_dashboard"]
 });
 ```
+
+## 电商图片工具
+
+电商图片能力位于 AgentTool 内，不是独立 Brick。四个工具默认隐藏，产品只有把名称放进现有 `tools` 白名单后，模型才会看到并调用：
+
+```js
+const agentTool = new AgentTool({
+  workspace,
+  runtimeDependencies,
+  tools: [
+    "ecommerce_image_generate",
+    "ecommerce_image_edit",
+    "ecommerce_image_batch",
+    "ecommerce_image_list"
+  ]
+});
+```
+
+首版固定使用 `gpt-image-2`。一次 generate 可以提交多个独立 job，每个 job 用 `count` 指定独立成图数量；例如 2 个 job 各自 `count=3` 会得到 6 个独立 `assetId`，不表示 2×3 拼图或矩阵布局。全部 job 的 count 合计最多 9。
+
+```js
+const submitted = await agentTool.execute("ecommerce_image_generate", {
+  modelId: "gpt-image-2",
+  jobs: [{
+    prompt: "白底电商主图，保持商品结构和 Logo",
+    size: { width: 2048, height: 2048 },
+    quality: "high",
+    count: 3,
+    referenceImages: [{
+      path: "uploads/product.png",
+      role: "product",
+      preserve: "strict"
+    }]
+  }],
+  output: { format: "png" }
+}, { workspace });
+```
+
+提交立即返回 `batchId`。使用 `ecommerce_image_batch` 的 `status` 轮询，`waitMs` 最多 30000；`cancel` 会保留已完成图片，`retry` 只复制 failed/interrupted 项创建新批次。生成结果写入 `outputs/ecommerce-images/`，每张图片都是 `agent-output.v1`、`renderer=ecommerce-image` 的独立 artifact。
+
+编辑必须指定 `assetId` 和明确的历史 `versionId`。它会把目标版本、修改意见和可选额外参考图重新提交给 GPT Image 2，并在同一资产下创建 `v2`、`v3` 等新版本；原文件永不覆盖。`ecommerce_image_list` 可按 batch、asset 或状态查询，asset 查询返回完整父版本、参数、workspace 相对路径和内容哈希。
+
+参考图只接受当前 workspace 内的 PNG/JPEG/WebP。运行时通过 realpath 阻止路径和符号链接越界，每张最多 10MB、每个 job 最多 5 张且合计最多 30MB；内容按 SHA-256 去重到 `outputs/ecommerce-images/sources/`。AgentTool 不保存 provider key，图片通过 multipart 发送到 Server Tool Gateway。
 
 图表工具真实生成 Vega-Lite JSON、SVG、PNG 和 manifest；看板工具真实生成结构化 JSON、
 HTML、图表文件和 manifest。所有正式文件固定写到 `outputs/visualizations/`，并通过

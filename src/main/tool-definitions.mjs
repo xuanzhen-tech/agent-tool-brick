@@ -531,6 +531,224 @@ export const IMAGE_PRESENT_TOOL = {
   cancelable: true
 };
 
+const ECOMMERCE_IMAGE_SIZE_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["width", "height"],
+  properties: {
+    width: {
+      type: "integer",
+      description: "精确输出宽度。必须为 16 的倍数，并满足 GPT Image 2 尺寸合同。"
+    },
+    height: {
+      type: "integer",
+      description: "精确输出高度。必须为 16 的倍数，并满足 GPT Image 2 尺寸合同。"
+    }
+  }
+};
+
+const ECOMMERCE_IMAGE_OUTPUT_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    format: {
+      type: "string",
+      enum: ["png", "jpeg", "webp"],
+      description: "输出格式，默认 png。"
+    },
+    compression: {
+      type: "integer",
+      minimum: 0,
+      maximum: 100,
+      description: "仅 JPEG/WebP 可用的压缩质量。PNG 不允许传入。"
+    }
+  }
+};
+
+const ECOMMERCE_IMAGE_REFERENCE_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["path", "role", "preserve"],
+  properties: {
+    path: {
+      type: "string",
+      description: "当前 workspace 内 PNG/JPEG/WebP 图片路径。"
+    },
+    role: {
+      type: "string",
+      enum: ["product", "logo", "style", "scene", "layout"],
+      description: "参考图在本次生成中的语义角色。"
+    },
+    preserve: {
+      type: "string",
+      enum: ["strict", "balanced", "loose"],
+      description: "参考图特征的保留强度。"
+    }
+  }
+};
+
+export const ECOMMERCE_IMAGE_GENERATE_TOOL = {
+  name: "ecommerce_image_generate",
+  description: "异步提交一组电商图片生成需求。每个 job 的 count 都会产生独立、可继续编辑的图片资产。",
+  defaultVisible: false,
+  schema: {
+    type: "function",
+    function: {
+      name: "ecommerce_image_generate",
+      description: "提交 GPT Image 2 电商图片批次。jobs 数量乘各自 count 只是独立图片数量，不表示拼图或矩阵布局。",
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        required: ["jobs"],
+        properties: {
+          modelId: {
+            type: "string",
+            enum: ["gpt-image-2"],
+            description: "首版只支持 gpt-image-2，省略时使用该默认值。"
+          },
+          jobs: {
+            type: "array",
+            minItems: 1,
+            description: "独立图片需求。全部 job 的 count 合计最多 9。",
+            items: {
+              type: "object",
+              additionalProperties: false,
+              required: ["prompt", "size"],
+              properties: {
+                prompt: { type: "string", description: "完整、可直接用于图片模型的电商生图提示词。" },
+                size: ECOMMERCE_IMAGE_SIZE_SCHEMA,
+                quality: { type: "string", enum: ["auto", "low", "medium", "high"], description: "默认 auto。" },
+                count: { type: "integer", minimum: 1, maximum: 9, description: "该需求生成的独立图片数量，默认 1。" },
+                referenceImages: {
+                  type: "array",
+                  maxItems: 5,
+                  items: ECOMMERCE_IMAGE_REFERENCE_SCHEMA,
+                  description: "可选参考图；每张最多 10MB，单个 job 合计最多 30MB。"
+                }
+              }
+            }
+          },
+          output: ECOMMERCE_IMAGE_OUTPUT_SCHEMA
+        }
+      }
+    }
+  },
+  permissions: ["workspace.read", "workspace.write", "network.image.generate"],
+  timeoutMs: 30_000,
+  cancelable: true
+};
+
+export const ECOMMERCE_IMAGE_EDIT_TOOL = {
+  name: "ecommerce_image_edit",
+  description: "基于任意已有资产版本异步生成新版本，不覆盖原图片。",
+  defaultVisible: false,
+  schema: {
+    type: "function",
+    function: {
+      name: "ecommerce_image_edit",
+      description: "把目标版本、修改意见和可选参考图重新提交给 GPT Image 2。每项 edit 只生成一张同 assetId 的新版本。",
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        required: ["edits"],
+        properties: {
+          modelId: {
+            type: "string",
+            enum: ["gpt-image-2"],
+            description: "首版只支持 gpt-image-2，省略时使用该默认值。"
+          },
+          edits: {
+            type: "array",
+            minItems: 1,
+            maxItems: 9,
+            items: {
+              type: "object",
+              additionalProperties: false,
+              required: ["assetId", "versionId", "prompt", "size"],
+              properties: {
+                assetId: { type: "string", description: "ecommerce_image_generate/list 返回的资产 ID。" },
+                versionId: { type: "string", description: "明确的来源版本，例如 v1；允许基于历史版本编辑。" },
+                prompt: { type: "string", description: "只描述本次需要修改的内容以及必须保持的内容。" },
+                size: ECOMMERCE_IMAGE_SIZE_SCHEMA,
+                quality: { type: "string", enum: ["auto", "low", "medium", "high"], description: "默认 auto。" },
+                additionalReferenceImages: {
+                  type: "array",
+                  maxItems: 5,
+                  items: ECOMMERCE_IMAGE_REFERENCE_SCHEMA
+                }
+              }
+            }
+          },
+          output: ECOMMERCE_IMAGE_OUTPUT_SCHEMA
+        }
+      }
+    }
+  },
+  permissions: ["workspace.read", "workspace.write", "network.image.generate"],
+  timeoutMs: 30_000,
+  cancelable: true
+};
+
+export const ECOMMERCE_IMAGE_BATCH_TOOL = {
+  name: "ecommerce_image_batch",
+  description: "查询、取消或重试电商图片异步批次。",
+  defaultVisible: false,
+  schema: {
+    type: "function",
+    function: {
+      name: "ecommerce_image_batch",
+      description: "status 可长轮询最多 30 秒；cancel 保留已完成图片；retry 只复制失败或中断项创建新批次。",
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        required: ["action", "batchId"],
+        properties: {
+          action: { type: "string", enum: ["status", "cancel", "retry"] },
+          batchId: { type: "string" },
+          waitMs: {
+            type: "integer",
+            minimum: 0,
+            maximum: 30_000,
+            description: "仅 status 使用，最多等待 30 秒。"
+          }
+        }
+      }
+    }
+  },
+  permissions: ["workspace.read", "workspace.write", "network.image.generate"],
+  timeoutMs: 35_000,
+  cancelable: true
+};
+
+export const ECOMMERCE_IMAGE_LIST_TOOL = {
+  name: "ecommerce_image_list",
+  description: "查询电商图片批次或资产的不可覆盖版本历史。",
+  defaultVisible: false,
+  schema: {
+    type: "function",
+    function: {
+      name: "ecommerce_image_list",
+      description: "按 batchId、assetId 或状态查询。assetId 查询会返回完整版本、父版本、模型参数、workspace 相对路径和内容哈希。",
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          batchId: { type: "string" },
+          assetId: { type: "string" },
+          status: {
+            type: "string",
+            enum: ["queued", "running", "partial", "completed", "failed", "cancelled", "interrupted"]
+          },
+          limit: { type: "integer", minimum: 1, maximum: 100 }
+        }
+      }
+    }
+  },
+  permissions: ["workspace.read"],
+  timeoutMs: 10_000,
+  cancelable: false
+};
+
 // 可视化工具默认不进入 new AgentTool() 的旧行为。产品需要在 tools 白名单中
 // 明确选择它们，才会让模型看到这些数据处理和文件输出能力。
 export const VISUALIZATION_CREATE_CHART_TOOL = {

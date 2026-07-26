@@ -122,6 +122,7 @@ async function validateRuntimeArtifactIfPresent() {
     "brick-definition.snapshot.json",
     "src/cli.mjs",
     "src/main/server.mjs",
+    "src/main/ecommerce-image-runtime.mjs",
     "src/main/shell-runtime.mjs",
     "src/main/runtime-dependency-config.mjs",
     "src/main/search-runtime.mjs",
