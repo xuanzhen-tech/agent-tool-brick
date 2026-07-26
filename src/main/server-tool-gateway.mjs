@@ -33,6 +33,53 @@ export async function postServerToolGatewayJson(config, path, body, signal) {
   return parsed;
 }
 
+export async function postServerToolGatewayMultipart(config, path, input, signal) {
+  const availability = isServerToolGatewayAvailable(config);
+  if (!availability.available) {
+    throw createGatewayError("server_tool_gateway_unavailable", availability.detail, {
+      retryable: false
+    });
+  }
+
+  const form = new FormData();
+  form.set("request", JSON.stringify(input?.request ?? {}));
+  for (const image of input?.images ?? []) {
+    form.append(
+      "image",
+      new Blob([Uint8Array.from(image.bytes)], { type: image.mimeType }),
+      image.filename
+    );
+  }
+
+  let response;
+  try {
+    response = await fetch(joinUrl(config.toolGatewayBaseUrl, path), {
+      method: "POST",
+      body: form,
+      signal
+    });
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    throw createGatewayError("server_tool_gateway_network_error", error instanceof Error ? error.message : String(error), {
+      retryable: false
+    });
+  }
+  const parsed = await response.json().catch(() => ({}));
+  if (!response.ok || parsed?.ok === false || parsed?.error) {
+    throw createGatewayError(
+      readErrorCode(parsed) ?? "server_tool_gateway_http_error",
+      readErrorMessage(parsed) ?? `Server tool gateway returned HTTP ${response.status}.`,
+      {
+        statusCode: response.status,
+        retryable: typeof parsed?.error?.retryable === "boolean"
+          ? parsed.error.retryable
+          : false
+      }
+    );
+  }
+  return parsed;
+}
+
 function joinUrl(baseUrl, path) {
   return `${String(baseUrl).replace(/\/+$/, "")}${path.startsWith("/") ? path : `/${path}`}`;
 }
@@ -47,8 +94,10 @@ function readErrorMessage(value) {
     : typeof value?.message === "string" ? value.message : undefined;
 }
 
-function createGatewayError(code, message) {
+function createGatewayError(code, message, details = {}) {
   const error = new Error(message);
   error.code = code;
+  error.statusCode = details.statusCode;
+  error.retryable = details.retryable === true;
   return error;
 }

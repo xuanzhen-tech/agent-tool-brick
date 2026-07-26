@@ -9,6 +9,10 @@ import { brickDefinition } from "../brick-definition.mjs";
 import { createAgentToolManifest } from "./tool-contract.mjs";
 import {
   EMAIL_SEND_TOOL,
+  ECOMMERCE_IMAGE_BATCH_TOOL,
+  ECOMMERCE_IMAGE_EDIT_TOOL,
+  ECOMMERCE_IMAGE_GENERATE_TOOL,
+  ECOMMERCE_IMAGE_LIST_TOOL,
   EXEC_COMMAND_TOOL,
   IMAGE_PRESENT_TOOL,
   RUN_SHELL_TOOL,
@@ -39,6 +43,7 @@ export async function createToolRegistry(config, options = {}) {
   const webAvailability = isWebProviderAvailable(config);
   const emailAvailability = isEmailProviderAvailable(config);
   const imagePresentAvailability = isImagePresentAvailable();
+  const ecommerceImageRuntime = options.ecommerceImageRuntime;
   const terminalManager = options.terminalManager ?? createTerminalSessionManager(config);
   const selectedTools = normalizeSelectedTools(options.selectedTools);
   const providerEntries = options.providerEntries ?? normalizeToolProviders(options.toolProviders);
@@ -83,6 +88,13 @@ export async function createToolRegistry(config, options = {}) {
 
   if (imagePresentAvailability.available) {
     addTool(IMAGE_PRESENT_TOOL, executeImagePresent);
+  }
+
+  if (ecommerceImageRuntime) {
+    addTool(ECOMMERCE_IMAGE_GENERATE_TOOL, (call, _currentConfig, signal) => ecommerceImageRuntime.generate({ ...call, signal }));
+    addTool(ECOMMERCE_IMAGE_EDIT_TOOL, (call, _currentConfig, signal) => ecommerceImageRuntime.edit({ ...call, signal }));
+    addTool(ECOMMERCE_IMAGE_BATCH_TOOL, (call, _currentConfig, signal) => ecommerceImageRuntime.batch({ ...call, signal }));
+    addTool(ECOMMERCE_IMAGE_LIST_TOOL, (call, _currentConfig, signal) => ecommerceImageRuntime.list({ ...call, signal }));
   }
 
   addTool(VISUALIZATION_CREATE_CHART_TOOL, executeVisualizationCreateChart);
@@ -194,7 +206,11 @@ function createExecutionFailureResult(call, signal, error) {
   const interrupted = signal?.aborted === true;
   const message = error instanceof Error ? error.message : String(error);
   const status = interrupted ? "interrupted" : "failed";
-  const code = interrupted ? "interrupted" : "tool_execution_failed";
+  const code = interrupted
+    ? "interrupted"
+    : typeof error?.code === "string" && error.code.startsWith("ecommerce_image_")
+      ? error.code
+      : "tool_execution_failed";
   return {
     status,
     content: interrupted

@@ -9,6 +9,7 @@
 
 import { brickDefinition } from "../brick-definition.mjs";
 import { createDiagnosticsReport } from "./diagnostics.mjs";
+import { createEcommerceImageRuntime } from "./ecommerce-image-runtime.mjs";
 import { isEmailProviderAvailable } from "./email-runtime.mjs";
 import { isImagePresentAvailable } from "./image-runtime.mjs";
 import { resolveServiceConfig } from "./launch-config.mjs";
@@ -16,6 +17,10 @@ import { createRuntimeDependencyConfig } from "./runtime-dependency-config.mjs";
 import { createTerminalSessionManager } from "./terminal-runtime.mjs";
 import {
   EMAIL_SEND_TOOL,
+  ECOMMERCE_IMAGE_BATCH_TOOL,
+  ECOMMERCE_IMAGE_EDIT_TOOL,
+  ECOMMERCE_IMAGE_GENERATE_TOOL,
+  ECOMMERCE_IMAGE_LIST_TOOL,
   EXEC_COMMAND_TOOL,
   IMAGE_PRESENT_TOOL,
   RUN_SHELL_TOOL,
@@ -45,6 +50,10 @@ const BUILTIN_TOOL_NAMES = new Set([
   WEB_SEARCH_TOOL.name,
   WEB_FETCH_TOOL.name,
   EMAIL_SEND_TOOL.name,
+  ECOMMERCE_IMAGE_GENERATE_TOOL.name,
+  ECOMMERCE_IMAGE_EDIT_TOOL.name,
+  ECOMMERCE_IMAGE_BATCH_TOOL.name,
+  ECOMMERCE_IMAGE_LIST_TOOL.name,
   IMAGE_PRESENT_TOOL.name,
   VISUALIZATION_CREATE_CHART_TOOL.name,
   VISUALIZATION_CREATE_DASHBOARD_TOOL.name
@@ -69,6 +78,7 @@ export class AgentTool {
       ...runtimeConfig
     });
     this.terminalManager = createTerminalSessionManager(this.config);
+    this.ecommerceImageRuntime = createEcommerceImageRuntime(this.config);
     this.registryPromise = undefined;
   }
 
@@ -87,6 +97,7 @@ export class AgentTool {
       runtimeDependencies: this.runtimeDependencies,
       skillRuntime: this.skillRuntime,
       terminalManager: this.terminalManager,
+      ecommerceImageRuntime: this.ecommerceImageRuntime,
       selectedTools: this.selectedTools,
       toolProviders: this.toolProviders
     });
@@ -141,6 +152,7 @@ export class AgentTool {
       ...input,
       config: input.config ?? this.config,
       terminalManager: input.terminalManager ?? this.terminalManager,
+      ecommerceImageRuntime: input.ecommerceImageRuntime ?? this.ecommerceImageRuntime,
       skillRuntime: input.skillRuntime ?? this.skillRuntime,
       selectedTools: input.selectedTools ?? this.selectedTools,
       providerEntries: input.providerEntries ?? this.toolProviders,
@@ -150,6 +162,7 @@ export class AgentTool {
 
   async dispose() {
     this.terminalManager.closeAll("AgentTool 已释放。");
+    await this.ecommerceImageRuntime.dispose();
     await Promise.all(this.toolProviders.map(async ({ provider }) => {
       if (typeof provider.dispose === "function") await provider.dispose();
     }));
@@ -159,6 +172,7 @@ export class AgentTool {
     if (!this.registryPromise) {
       this.registryPromise = createToolRegistry(this.config, {
         terminalManager: this.terminalManager,
+        ecommerceImageRuntime: this.ecommerceImageRuntime,
         skillRuntime: this.skillRuntime,
         selectedTools: this.selectedTools,
         providerEntries: this.toolProviders
@@ -179,7 +193,7 @@ function normalizeConstructorInput(input) {
   };
 }
 
-function selectModelToolSchemas({ config, runtimeDependencies, skillRuntime, terminalManager, selectedTools, toolProviders }) {
+function selectModelToolSchemas({ config, runtimeDependencies, skillRuntime, terminalManager, ecommerceImageRuntime, selectedTools, toolProviders }) {
   const tools = [];
   const add = (tool, available = true) => {
     if (available && isToolRequested(tool.name, selectedTools, tool.defaultVisible !== false)) {
@@ -204,6 +218,10 @@ function selectModelToolSchemas({ config, runtimeDependencies, skillRuntime, ter
   }
   add(EMAIL_SEND_TOOL, isEmailProviderAvailable(config).available);
   add(IMAGE_PRESENT_TOOL, isImagePresentAvailable().available);
+  add(ECOMMERCE_IMAGE_GENERATE_TOOL, Boolean(ecommerceImageRuntime));
+  add(ECOMMERCE_IMAGE_EDIT_TOOL, Boolean(ecommerceImageRuntime));
+  add(ECOMMERCE_IMAGE_BATCH_TOOL, Boolean(ecommerceImageRuntime));
+  add(ECOMMERCE_IMAGE_LIST_TOOL, Boolean(ecommerceImageRuntime));
   add(VISUALIZATION_CREATE_CHART_TOOL);
   add(VISUALIZATION_CREATE_DASHBOARD_TOOL);
 
