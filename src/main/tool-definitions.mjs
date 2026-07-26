@@ -589,44 +589,44 @@ const ECOMMERCE_IMAGE_REFERENCE_SCHEMA = {
 
 export const ECOMMERCE_IMAGE_GENERATE_TOOL = {
   name: "ecommerce_image_generate",
-  description: "异步提交一组电商图片生成需求。每个 job 的 count 都会产生独立、可继续编辑的图片资产。",
+  description: "异步提交一个电商图片需求，并用同一模型和同一组参数生成 count 张独立、可继续编辑的图片资产。",
   defaultVisible: false,
   schema: {
     type: "function",
     function: {
       name: "ecommerce_image_generate",
-      description: "提交 GPT Image 2 电商图片批次。jobs 数量乘各自 count 只是独立图片数量，不表示拼图或矩阵布局。",
+      description: "提交一个 GPT Image 2 电商图片需求。count 只表示同一模型生成的独立图片数量，不存在模型分组、矩阵、行列或拼图语义。",
       parameters: {
         type: "object",
         additionalProperties: false,
-        required: ["jobs"],
+        required: ["prompt", "size"],
         properties: {
           modelId: {
             type: "string",
             enum: ["gpt-image-2"],
             description: "首版只支持 gpt-image-2，省略时使用该默认值。"
           },
-          jobs: {
+          prompt: {
+            type: "string",
+            description: "本次唯一需求的完整电商生图提示词；不同 prompt 应分别调用本工具。"
+          },
+          size: ECOMMERCE_IMAGE_SIZE_SCHEMA,
+          quality: {
+            type: "string",
+            enum: ["auto", "low", "medium", "high"],
+            description: "本次全部图片共享的质量，默认 auto。"
+          },
+          count: {
+            type: "integer",
+            minimum: 1,
+            maximum: 9,
+            description: "使用同一模型、prompt 和参数生成的独立图片数量，默认 1。"
+          },
+          referenceImages: {
             type: "array",
-            minItems: 1,
-            description: "独立图片需求。全部 job 的 count 合计最多 9。",
-            items: {
-              type: "object",
-              additionalProperties: false,
-              required: ["prompt", "size"],
-              properties: {
-                prompt: { type: "string", description: "完整、可直接用于图片模型的电商生图提示词。" },
-                size: ECOMMERCE_IMAGE_SIZE_SCHEMA,
-                quality: { type: "string", enum: ["auto", "low", "medium", "high"], description: "默认 auto。" },
-                count: { type: "integer", minimum: 1, maximum: 9, description: "该需求生成的独立图片数量，默认 1。" },
-                referenceImages: {
-                  type: "array",
-                  maxItems: 5,
-                  items: ECOMMERCE_IMAGE_REFERENCE_SCHEMA,
-                  description: "可选参考图；每张最多 10MB，单个 job 合计最多 30MB。"
-                }
-              }
-            }
+            maxItems: 5,
+            items: ECOMMERCE_IMAGE_REFERENCE_SCHEMA,
+            description: "本次全部图片共享的可选参考图；每张最多 10MB，合计最多 30MB。"
           },
           output: ECOMMERCE_IMAGE_OUTPUT_SCHEMA
         }

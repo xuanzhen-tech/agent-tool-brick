@@ -120,21 +120,19 @@ const agentTool = new AgentTool({
 });
 ```
 
-首版固定使用 `gpt-image-2`。一次 generate 可以提交多个独立 job，每个 job 用 `count` 指定独立成图数量；例如 2 个 job 各自 `count=3` 会得到 6 个独立 `assetId`，不表示 2×3 拼图或矩阵布局。全部 job 的 count 合计最多 9。
+首版固定使用 `gpt-image-2`。一次 generate 只提交一个图片需求，根级 `count` 指定使用同一模型、prompt、尺寸、质量和参考图生成多少张独立图片，最多 9 张。当前没有模型分组、行列、矩阵或拼图语义；不同 prompt 应分别调用工具。未来只有在同时装配多个图片模型时，才会单独设计“模型数量 × 每个模型生成数量”的比较合同。
 
 ```js
 const submitted = await agentTool.execute("ecommerce_image_generate", {
   modelId: "gpt-image-2",
-  jobs: [{
-    prompt: "白底电商主图，保持商品结构和 Logo",
-    size: { width: 2048, height: 2048 },
-    quality: "high",
-    count: 3,
-    referenceImages: [{
-      path: "uploads/product.png",
-      role: "product",
-      preserve: "strict"
-    }]
+  prompt: "白底电商主图，保持商品结构和 Logo",
+  size: { width: 2048, height: 2048 },
+  quality: "high",
+  count: 4,
+  referenceImages: [{
+    path: "uploads/product.png",
+    role: "product",
+    preserve: "strict"
   }],
   output: { format: "png" }
 }, { workspace });

@@ -69,39 +69,35 @@ export class EcommerceImageRuntime {
       status: "queued",
       createdAt: nowIso(),
       updatedAt: nowIso(),
+      count: input.count,
       output: input.output,
       items: []
     };
 
-    let jobIndex = 0;
-    for (const job of input.jobs) {
-      jobIndex += 1;
-      for (let copyIndex = 1; copyIndex <= job.count; copyIndex += 1) {
-        const assetId = createId("asset");
-        const item = {
-          itemId: createId("item"),
-          kind: "generate",
-          status: "queued",
-          jobIndex,
-          copyIndex,
-          prompt: job.prompt,
-          size: job.size,
-          quality: job.quality,
-          output: input.output,
-          references: job.references,
-          assetId,
-          versionId: "v1",
-          attempts: 0,
-          createdAt: nowIso(),
-          updatedAt: nowIso()
-        };
-        batch.items.push(item);
-        await this.#writeAssetManifest(workspace, createAssetManifest({
-          assetId,
-          batchId: batch.batchId,
-          item
-        }));
-      }
+    for (let outputIndex = 1; outputIndex <= input.count; outputIndex += 1) {
+      const assetId = createId("asset");
+      const item = {
+        itemId: createId("item"),
+        kind: "generate",
+        status: "queued",
+        outputIndex,
+        prompt: input.prompt,
+        size: input.size,
+        quality: input.quality,
+        output: input.output,
+        references: input.references,
+        assetId,
+        versionId: "v1",
+        attempts: 0,
+        createdAt: nowIso(),
+        updatedAt: nowIso()
+      };
+      batch.items.push(item);
+      await this.#writeAssetManifest(workspace, createAssetManifest({
+        assetId,
+        batchId: batch.batchId,
+        item
+      }));
     }
 
     await this.#writeBatch(workspace, batch);
@@ -433,17 +429,16 @@ export class EcommerceImageRuntime {
       throw invalidInput("ecommerce_image_nothing_to_retry", "该批次没有 failed 或 interrupted 项目。");
     }
     if (original.type === "generate") {
+      const first = retryable[0];
       return await this.generate({
         ...call,
         arguments: {
           modelId: original.modelId,
-          jobs: retryable.map((item) => ({
-            prompt: item.prompt,
-            size: item.size,
-            quality: item.quality,
-            count: 1,
-            referenceImages: (item.references ?? []).map(storedReferenceToInput)
-          })),
+          prompt: first.prompt,
+          size: first.size,
+          quality: first.quality,
+          count: retryable.length,
+          referenceImages: (first.references ?? []).map(storedReferenceToInput),
           output: original.output
         }
       });
@@ -581,31 +576,17 @@ export class EcommerceImageRuntime {
 
 async function normalizeGenerateInput(value, workspace) {
   assertRecord(value, "ecommerce_image_generate 参数必须是对象。");
-  assertAllowedKeys(value, ["modelId", "jobs", "output"]);
+  assertAllowedKeys(value, ["modelId", "prompt", "size", "quality", "count", "referenceImages", "output"]);
   const modelId = normalizeModel(value.modelId);
-  if (!Array.isArray(value.jobs) || !value.jobs.length) {
-    throw invalidInput("ecommerce_image_jobs_required", "jobs 必须是非空数组。");
-  }
-  const output = normalizeOutput(value.output);
-  const jobs = [];
-  let total = 0;
-  for (const rawJob of value.jobs) {
-    assertRecord(rawJob, "每个 job 必须是对象。");
-    assertAllowedKeys(rawJob, ["prompt", "size", "quality", "count", "referenceImages"]);
-    const count = rawJob.count === undefined ? 1 : normalizeInteger(rawJob.count, "count", 1, MAX_BATCH_IMAGES);
-    total += count;
-    if (total > MAX_BATCH_IMAGES) {
-      throw invalidInput("ecommerce_image_batch_too_large", `所有 job 的 count 合计最多为 ${MAX_BATCH_IMAGES}。`);
-    }
-    jobs.push({
-      prompt: normalizePrompt(rawJob.prompt),
-      size: normalizeSize(rawJob.size),
-      quality: normalizeQuality(rawJob.quality),
-      count,
-      references: await normalizeReferences(rawJob.referenceImages, workspace)
-    });
-  }
-  return { modelId, jobs, output };
+  return {
+    modelId,
+    prompt: normalizePrompt(value.prompt),
+    size: normalizeSize(value.size),
+    quality: normalizeQuality(value.quality),
+    count: value.count === undefined ? 1 : normalizeInteger(value.count, "count", 1, MAX_BATCH_IMAGES),
+    references: await normalizeReferences(value.referenceImages, workspace),
+    output: normalizeOutput(value.output)
+  };
 }
 
 async function normalizeEditInput(value, workspace) {
@@ -865,6 +846,7 @@ function createAssetVersion({ batchId, item }) {
     batchId,
     status: item.status,
     modelId: MODEL_ID,
+    outputIndex: item.outputIndex,
     prompt: item.prompt,
     size: item.size,
     quality: item.quality,
@@ -886,9 +868,6 @@ function queuedResult(call, batch) {
   return completedResult(call, {
     batchId: batch.batchId,
     status: batch.status,
-    jobCount: batch.type === "generate"
-      ? new Set(batch.items.map((item) => item.jobIndex)).size
-      : batch.items.length,
     imageCount: batch.items.length
   });
 }
@@ -915,6 +894,7 @@ function publicBatch(batch) {
     createdAt: batch.createdAt,
     updatedAt: batch.updatedAt,
     output: batch.output,
+    ...(batch.type === "generate" ? { count: batch.count } : {}),
     progress: {
       total: batch.items.length,
       queued: batch.items.filter((item) => item.status === "queued").length,
@@ -927,6 +907,7 @@ function publicBatch(batch) {
     items: batch.items.map((item) => ({
       itemId: item.itemId,
       status: item.status,
+      outputIndex: item.outputIndex,
       assetId: item.assetId,
       versionId: item.versionId,
       parentVersionId: item.parentVersionId,
@@ -970,6 +951,7 @@ function createArtifact(item, batchId) {
       assetId: item.assetId,
       versionId: item.versionId,
       parentVersionId: item.parentVersionId,
+      outputIndex: item.outputIndex,
       path: item.path,
       contentHash: item.contentHash,
       modelId: MODEL_ID,

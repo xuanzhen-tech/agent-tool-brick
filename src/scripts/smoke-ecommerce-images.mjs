@@ -80,33 +80,40 @@ try {
   assert.deepEqual(tool.definitions.map((definition) => definition.function.name).sort(), [...TOOL_NAMES].sort());
 
   const generated = await tool.execute("ecommerce_image_generate", {
-    jobs: [{
-      prompt: "生成白底商品主图",
-      size: { width: 1024, height: 1024 },
-      quality: "high",
-      count: 3,
-      referenceImages: [{
-        path: "uploads/product.png",
-        role: "product",
-        preserve: "strict"
-      }]
-    }, {
-      prompt: "生成生活方式场景图",
-      size: { width: 1536, height: 1024 },
-      count: 3
+    prompt: "生成白底商品主图",
+    size: { width: 1024, height: 1024 },
+    quality: "high",
+    count: 4,
+    referenceImages: [{
+      path: "uploads/product.png",
+      role: "product",
+      preserve: "strict"
     }]
   }, { workspace });
   assert.equal(generated.status, "completed");
   assert.equal(generated.details.status, "queued");
-  assert.equal(generated.details.jobCount, 2);
-  assert.equal(generated.details.imageCount, 6);
+  assert.equal(Object.hasOwn(generated.details, "jobCount"), false);
+  assert.equal(generated.details.imageCount, 4);
 
   const completed = await waitForBatch(tool, generated.details.batchId);
   assert.equal(completed.details.status, "completed");
-  assert.equal(completed.details.progress.completed, 6);
-  assert.equal(completed.artifacts.length, 6);
-  assert.equal(new Set(completed.details.items.map((item) => item.assetId)).size, 6);
+  assert.equal(completed.details.count, 4);
+  assert.equal(completed.details.progress.completed, 4);
+  assert.deepEqual(completed.details.items.map((item) => item.outputIndex), [1, 2, 3, 4]);
+  assert.equal(completed.artifacts.length, 4);
+  assert.equal(new Set(completed.details.items.map((item) => item.assetId)).size, 4);
   assert.equal(maxActiveRequests, 2);
+  const generatedManifest = JSON.parse(await fs.readFile(path.join(
+    workspace,
+    "outputs",
+    "ecommerce-images",
+    "batches",
+    generated.details.batchId,
+    "manifest.json"
+  ), "utf8"));
+  assert.equal(generatedManifest.count, 4);
+  assert.deepEqual(generatedManifest.items.map((item) => item.outputIndex), [1, 2, 3, 4]);
+  assert.equal(generatedManifest.items.some((item) => "jobIndex" in item || "copyIndex" in item), false);
   for (const artifact of completed.artifacts) {
     assert.equal(artifact.schemaVersion, "agent-output.v1");
     assert.equal(artifact.kind, "image");
@@ -114,8 +121,7 @@ try {
     assert.equal(artifact.data.versionId, "v1");
     assert.equal(await pathExists(path.join(workspace, ...artifact.files[0].path.split("/"))), true);
   }
-  assert.equal(providerRequests.filter((request) => request.images === 1).length, 3);
-  assert.equal(providerRequests.filter((request) => request.images === 0).length, 3);
+  assert.equal(providerRequests.filter((request) => request.images === 1).length, 4);
 
   toolServer = await tool.createServer({
     config: { ...tool.config, host: "127.0.0.1", port: 0 }
@@ -210,10 +216,8 @@ try {
   assert.equal(duplicateEdit.error.code, "ecommerce_image_duplicate_asset_edit");
 
   const transient = await tool.execute("ecommerce_image_generate", {
-    jobs: [{
-      prompt: "TRANSIENT 后生成",
-      size: { width: 1024, height: 1024 }
-    }]
+    prompt: "TRANSIENT 后生成",
+    size: { width: 1024, height: 1024 }
   }, { workspace });
   const transientCompleted = await waitForBatch(tool, transient.details.batchId);
   assert.equal(transientCompleted.details.status, "completed");
@@ -221,10 +225,8 @@ try {
   assert.equal(transientFailures, 2);
 
   const rejected = await tool.execute("ecommerce_image_generate", {
-    jobs: [{
-      prompt: "REJECT",
-      size: { width: 1024, height: 1024 }
-    }]
+    prompt: "REJECT",
+    size: { width: 1024, height: 1024 }
   }, { workspace });
   const rejectedCompleted = await waitForBatch(tool, rejected.details.batchId);
   assert.equal(rejectedCompleted.details.status, "failed");
@@ -242,11 +244,9 @@ try {
   assert.notEqual(retryCompleted.details.items[0].assetId, rejectedCompleted.details.items[0].assetId);
 
   const slow = await tool.execute("ecommerce_image_generate", {
-    jobs: [{
-      prompt: "SLOW",
-      size: { width: 1024, height: 1024 },
-      count: 3
-    }]
+    prompt: "SLOW",
+    size: { width: 1024, height: 1024 },
+    count: 3
   }, { workspace });
   await delay(50);
   await tool.execute("ecommerce_image_batch", {
@@ -258,23 +258,30 @@ try {
   assert.equal(cancelled.details.progress.cancelled, 3);
 
   const oversized = await tool.execute("ecommerce_image_generate", {
-    jobs: [
-      { prompt: "A", size: { width: 1024, height: 1024 }, count: 5 },
-      { prompt: "B", size: { width: 1024, height: 1024 }, count: 5 }
-    ]
+    prompt: "数量越界",
+    size: { width: 1024, height: 1024 },
+    count: 10
   }, { workspace });
   assert.equal(oversized.status, "failed");
-  assert.match(oversized.error.message, /最多为 9/);
+  assert.match(oversized.error.message, /1 到 9/);
+
+  const legacyJobs = await tool.execute("ecommerce_image_generate", {
+    jobs: [{
+      prompt: "旧版 jobs 合同",
+      size: { width: 1024, height: 1024 },
+      count: 2
+    }]
+  }, { workspace });
+  assert.equal(legacyJobs.status, "failed");
+  assert.equal(legacyJobs.error.code, "ecommerce_image_unknown_field");
 
   const escaped = await tool.execute("ecommerce_image_generate", {
-    jobs: [{
-      prompt: "越界参考图",
-      size: { width: 1024, height: 1024 },
-      referenceImages: [{
-        path: outsideImage,
-        role: "product",
-        preserve: "strict"
-      }]
+    prompt: "越界参考图",
+    size: { width: 1024, height: 1024 },
+    referenceImages: [{
+      path: outsideImage,
+      role: "product",
+      preserve: "strict"
     }]
   }, { workspace });
   assert.equal(escaped.status, "failed");
@@ -319,7 +326,7 @@ try {
   assert.equal(recoveredAsset.details.assets[0].versions[0].status, "interrupted");
 
   console.log("[smoke-ecommerce-images] default hidden ok");
-  console.log("[smoke-ecommerce-images] 2 jobs x 3 outputs ok");
+  console.log("[smoke-ecommerce-images] one prompt x count outputs ok");
   console.log("[smoke-ecommerce-images] edit history v1 -> v2 ok");
   console.log("[smoke-ecommerce-images] concurrent edit version lock ok");
   console.log("[smoke-ecommerce-images] concurrency and retry policy ok");
