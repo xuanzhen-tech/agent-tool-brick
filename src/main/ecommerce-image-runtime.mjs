@@ -18,7 +18,7 @@ const MAX_REFERENCES = 5;
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 const MAX_REFERENCE_BYTES = 30 * 1024 * 1024;
 const MAX_WAIT_MS = 30_000;
-const SINGLE_IMAGE_TIMEOUT_MS = 180_000;
+const SINGLE_IMAGE_TIMEOUT_MS = 390_000;
 const MAX_RETRIES = 2;
 const CONCURRENCY = 2;
 const TERMINAL_ITEM_STATUSES = new Set(["completed", "failed", "cancelled", "interrupted"]);
@@ -401,7 +401,11 @@ export class EcommerceImageRuntime {
       for (const item of batch.items) {
         if (item.status === "queued") {
           item.status = "cancelled";
-          item.error = { code: "ecommerce_image_cancelled", message: "批次已取消。", retryable: false };
+          item.error = {
+            code: "ecommerce_image_cancelled",
+            message: "批次已取消。上游是同步生图接口，已发出的请求仍可能继续生成并计费。",
+            retryable: false
+          };
           item.finishedAt = nowIso();
           item.updatedAt = nowIso();
           cancelledItems.push(item);
@@ -417,7 +421,9 @@ export class EcommerceImageRuntime {
     this.#notifyBatch(workspace, batchId);
     this.queue = this.queue.filter((entry) => !(entry.workspace === workspace && entry.batchId === batchId));
     for (const itemId of runningItems) {
-      this.controllers.get(itemKey(workspace, batchId, itemId))?.abort("批次已取消。");
+      this.controllers.get(itemKey(workspace, batchId, itemId))?.abort(
+        "批次已取消。上游是同步生图接口，已发出的请求仍可能继续生成并计费。"
+      );
     }
     return batchStatusResult(call, await this.#readBatch(workspace, batchId));
   }
@@ -784,11 +790,14 @@ function normalizeOutput(value) {
 
 function renderProviderPrompt(prompt, references, editing) {
   const lines = [prompt];
-  if (editing) lines.push("编辑约束：基于第一张目标版本图片执行修改，未明确要求变更的商品结构、颜色、文字和 Logo 必须保持不变。");
+  if (editing) {
+    lines.push("图片 1 是待编辑的目标版本。未明确要求变更的商品结构、颜色、文字和 Logo 必须保持不变。");
+  }
   if (references.length) {
-    lines.push("参考图语义（按目标图之后的上传顺序）：");
+    lines.push(editing ? "额外参考图语义：" : "参考图语义：");
     references.forEach((reference, index) => {
-      lines.push(`${index + 1}. role=${reference.role}; preserve=${reference.preserve}; ${preserveInstruction(reference.preserve)}`);
+      const imageNumber = index + (editing ? 2 : 1);
+      lines.push(`图片 ${imageNumber}: role=${reference.role}; preserve=${reference.preserve}; ${preserveInstruction(reference.preserve)}`);
     });
   }
   return lines.join("\n\n");
@@ -988,7 +997,7 @@ async function retryTransient(operation, signal) {
 
 async function withTimeout(operation, timeoutMs, parentSignal) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort("单张图片生成超过 180 秒。"), timeoutMs);
+  const timer = setTimeout(() => controller.abort(`单张图片生成超过 ${timeoutMs}ms。`), timeoutMs);
   const abort = () => controller.abort(parentSignal.reason);
   if (parentSignal?.aborted) abort();
   else parentSignal?.addEventListener("abort", abort, { once: true });
@@ -996,9 +1005,11 @@ async function withTimeout(operation, timeoutMs, parentSignal) {
     return await operation(controller.signal);
   } catch (error) {
     if (controller.signal.aborted && !parentSignal?.aborted) {
-      const timeoutError = new Error("单张图片生成超过 180 秒。");
+      const timeoutError = new Error(
+        `单张图片生成超过 ${timeoutMs}ms。上游结果未知，不能自动重试。`
+      );
       timeoutError.code = "ecommerce_image_timeout";
-      timeoutError.retryable = true;
+      timeoutError.retryable = false;
       throw timeoutError;
     }
     throw error;
@@ -1161,7 +1172,7 @@ function normalizeFailure(error, state) {
   if (state.cancelled) {
     return {
       code: "ecommerce_image_cancelled",
-      message: error instanceof Error ? error.message : "图片任务已取消。",
+      message: "图片任务已取消。上游是同步生图接口，已发出的请求仍可能继续生成并计费。",
       retryable: false
     };
   }

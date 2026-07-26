@@ -20,6 +20,7 @@ const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00]);
 let activeRequests = 0;
 let maxActiveRequests = 0;
 let transientFailures = 0;
+let networkFailures = 0;
 let rejectEnabled = true;
 const providerRequests = [];
 
@@ -49,6 +50,10 @@ globalThis.fetch = async (url, init) => {
         ok: false,
         error: { code: "ecommerce_image_moderation_blocked", message: "blocked", retryable: false }
       }, 400);
+    }
+    if (request.prompt.includes("NETWORK_UNKNOWN")) {
+      networkFailures += 1;
+      throw new TypeError("socket closed after request upload");
     }
     return jsonResponse({
       ok: true,
@@ -122,6 +127,12 @@ try {
     assert.equal(await pathExists(path.join(workspace, ...artifact.files[0].path.split("/"))), true);
   }
   assert.equal(providerRequests.filter((request) => request.images === 1).length, 4);
+  assert.equal(
+    providerRequests
+      .filter((request) => request.images === 1)
+      .every((request) => request.request.prompt.includes("图片 1: role=product; preserve=strict")),
+    true
+  );
 
   toolServer = await tool.createServer({
     config: { ...tool.config, host: "127.0.0.1", port: 0 }
@@ -154,7 +165,12 @@ try {
       versionId: "v1",
       prompt: "只替换为浅灰棚拍背景，保持商品结构、颜色和 Logo 不变",
       size: { width: 1024, height: 1024 },
-      quality: "high"
+      quality: "high",
+      additionalReferenceImages: [{
+        path: "uploads/product.png",
+        role: "style",
+        preserve: "loose"
+      }]
     }]
   }, { workspace });
   const editCompleted = await waitForBatch(tool, edited.details.batchId);
@@ -163,7 +179,9 @@ try {
   assert.equal(editCompleted.details.items[0].versionId, "v2");
   assert.equal(editCompleted.details.items[0].parentVersionId, "v1");
   assert.equal(providerRequests.at(-1).url.endsWith("/api/tools/ecommerce/images/edit"), true);
-  assert.equal(providerRequests.at(-1).images, 1);
+  assert.equal(providerRequests.at(-1).images, 2);
+  assert.match(providerRequests.at(-1).request.prompt, /图片 1 是待编辑的目标版本/);
+  assert.match(providerRequests.at(-1).request.prompt, /图片 2: role=style; preserve=loose/);
 
   const history = await tool.execute("ecommerce_image_list", { assetId: first.assetId }, { workspace });
   assert.equal(history.status, "completed");
@@ -233,6 +251,16 @@ try {
   assert.equal(rejectedCompleted.details.items[0].attempts, 1);
   assert.equal(rejectedCompleted.details.items[0].error.code, "ecommerce_image_moderation_blocked");
 
+  const networkUnknown = await tool.execute("ecommerce_image_generate", {
+    prompt: "NETWORK_UNKNOWN",
+    size: { width: 1024, height: 1024 }
+  }, { workspace });
+  const networkUnknownCompleted = await waitForBatch(tool, networkUnknown.details.batchId);
+  assert.equal(networkUnknownCompleted.details.status, "failed");
+  assert.equal(networkUnknownCompleted.details.items[0].attempts, 1);
+  assert.equal(networkUnknownCompleted.details.items[0].error.retryable, false);
+  assert.equal(networkFailures, 1);
+
   rejectEnabled = false;
   const retried = await tool.execute("ecommerce_image_batch", {
     action: "retry",
@@ -256,6 +284,10 @@ try {
   const cancelled = await waitForBatch(tool, slow.details.batchId);
   assert.equal(cancelled.details.status, "cancelled");
   assert.equal(cancelled.details.progress.cancelled, 3);
+  assert.equal(
+    cancelled.details.items.every((item) => item.error.message.includes("仍可能继续生成并计费")),
+    true
+  );
 
   const oversized = await tool.execute("ecommerce_image_generate", {
     prompt: "数量越界",

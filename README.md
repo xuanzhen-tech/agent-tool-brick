@@ -144,6 +144,8 @@ const submitted = await agentTool.execute("ecommerce_image_generate", {
 
 参考图只接受当前 workspace 内的 PNG/JPEG/WebP。运行时通过 realpath 阻止路径和符号链接越界，每张最多 10MB、每个 job 最多 5 张且合计最多 30MB；内容按 SHA-256 去重到 `outputs/ecommerce-images/sources/`。AgentTool 不保存 provider key，图片通过 multipart 发送到 Server Tool Gateway。
 
+单张图片最多等待 390 秒，Gateway 应在 360 秒内结束 provider 请求，生产反向代理应至少允许 420 秒。只有 Gateway 明确返回 `retryable: true` 时才会自动重试；网络断开、超时和取消后的上游结果未知，不会自动重试。取消运行中批次时，调用结果会明确提示已发出的同步请求仍可能继续生成并计费。
+
 图表工具真实生成 Vega-Lite JSON、SVG、PNG 和 manifest；看板工具真实生成结构化 JSON、
 HTML、图表文件和 manifest。所有正式文件固定写到 `outputs/visualizations/`，并通过
 `agent-output.v1` 交给 `AgentCli` 与产品 GUI。图表渲染固定使用随 SDK/artifact 发布的、

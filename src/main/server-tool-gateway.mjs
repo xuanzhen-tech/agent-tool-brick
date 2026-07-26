@@ -37,7 +37,7 @@ export async function postServerToolGatewayMultipart(config, path, input, signal
   const availability = isServerToolGatewayAvailable(config);
   if (!availability.available) {
     throw createGatewayError("server_tool_gateway_unavailable", availability.detail, {
-      retryable: true
+      retryable: false
     });
   }
 
@@ -61,7 +61,7 @@ export async function postServerToolGatewayMultipart(config, path, input, signal
   } catch (error) {
     if (signal?.aborted) throw error;
     throw createGatewayError("server_tool_gateway_network_error", error instanceof Error ? error.message : String(error), {
-      retryable: true
+      retryable: false
     });
   }
   const parsed = await response.json().catch(() => ({}));
@@ -73,7 +73,7 @@ export async function postServerToolGatewayMultipart(config, path, input, signal
         statusCode: response.status,
         retryable: typeof parsed?.error?.retryable === "boolean"
           ? parsed.error.retryable
-          : response.status === 429 || response.status >= 500
+          : false
       }
     );
   }
