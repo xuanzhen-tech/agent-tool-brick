@@ -2,7 +2,7 @@
 
 ## 版本
 
-- `@xuanzhen-tech/agent-tool-brick@0.7.0`
+- `@xuanzhen-tech/agent-tool-brick@0.7.1`
 - `@xuanzhen-tech/agent-skill-brick@0.5.0`
 - `agent-llm-gateway@0.3.0`，由服务端部署，不是 Product npm 依赖
 
@@ -87,4 +87,3 @@ GUI 可以直接复用现有 image artifact 展示能力。编辑结果沿用原
 4. 选择其中一张编辑，确认同一 `assetId` 新增 `v2`，且 `parentVersionId=v1`。
 5. 重启 Product 后用 list 查询，确认批次、资产和版本历史仍存在。
 6. 取消运行中批次，确认 GUI 展示“上游仍可能继续生成并计费”的提示。
-

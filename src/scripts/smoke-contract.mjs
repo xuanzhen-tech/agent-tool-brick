@@ -35,7 +35,7 @@ import { createToolResult } from "../main/tool-contract.mjs";
 
 assert.equal(brickDefinition.id, "agent-tool");
 assert.equal(brickDefinition.kind, "tool");
-assert.equal(brickDefinition.version, "0.7.0");
+assert.equal(brickDefinition.version, "0.7.1");
 assert.equal(validateBrickDefinition(brickDefinition).ok, true);
 assert.equal(brickDefinition.runtimeDependencies.some((item) => item.type === "node-runtime" && item.required === true), true);
 assert.equal(brickDefinition.runtimeDependencies.some((item) => item.slot === "tool:rg" && item.required === false), true);
@@ -156,6 +156,56 @@ const providerTool = new AgentTool({
 assert.equal(providerTool.definitions.some((tool) => tool.function?.name === "provider_echo"), true);
 assert.equal((await providerTool.execute("provider_echo", { value: "ok" })).details.name, "provider_echo");
 await providerTool.dispose();
+
+// 动态 Provider 的工具面必须在 AgentTool 创建后仍能即时变化；MCP 注册与启停
+// 依赖这个合同，不能要求产品重建 AgentTool 或 AgentCli。
+let dynamicEnabled = false;
+let dynamicContext;
+const dynamicProvider = {
+  id: "dynamic-provider",
+  getToolDescriptors() {
+    return dynamicEnabled ? [{
+      name: "dynamic_echo",
+      description: "Dynamic provider echo.",
+      schema: {
+        type: "function",
+        function: {
+          name: "dynamic_echo",
+          description: "Dynamic provider echo.",
+          parameters: { type: "object", additionalProperties: true }
+        }
+      },
+      defaultVisible: true
+    }] : [];
+  },
+  async execute(name, args, context) {
+    dynamicContext = context;
+    return { status: "completed", content: JSON.stringify({ name, args }), details: { name, args } };
+  }
+};
+const dynamicTool = new AgentTool({
+  workspace: process.cwd(),
+  tools: ["dynamic_echo"],
+  toolProviders: [dynamicProvider]
+});
+assert.equal(dynamicTool.definitions.some((tool) => tool.function?.name === "dynamic_echo"), false);
+dynamicEnabled = true;
+assert.equal(dynamicTool.definitions.some((tool) => tool.function?.name === "dynamic_echo"), true);
+assert.equal((await dynamicTool.execute("dynamic_echo", { value: "live" }, {
+  traceId: "trace-dynamic",
+  threadId: "thread-dynamic",
+  turnId: "turn-dynamic",
+  requestId: "request-dynamic",
+  toolCallId: "call-dynamic"
+})).status, "completed");
+assert.equal(dynamicContext.traceId, "trace-dynamic");
+assert.equal(dynamicContext.turnId, "turn-dynamic");
+assert.equal(dynamicContext.requestId, "request-dynamic");
+assert.equal(dynamicContext.toolCallId, "call-dynamic");
+dynamicEnabled = false;
+assert.equal(dynamicTool.definitions.some((tool) => tool.function?.name === "dynamic_echo"), false);
+assert.equal((await dynamicTool.execute("dynamic_echo", {})).error.code, "tool_unavailable");
+await dynamicTool.dispose();
 
 const playwrightAwareTool = new AgentTool({
   workspace: process.cwd(),
