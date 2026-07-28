@@ -44,8 +44,25 @@ const agentTool = new AgentTool({
 }
 ```
 
+动态 Provider 可以改为提供同步 `getToolDescriptors()`：
+
+```js
+{
+  id: "agent-mcp",
+  getToolDescriptors() {
+    return currentRegistrations.map(createDescriptor);
+  },
+  async execute(name, args, context) {}
+}
+```
+
+`AgentTool` 会在每次读取 `definitions`、HTTP manifest 和执行工具时重新解析动态
+descriptors。`getToolDescriptors()` 不允许返回 Promise；远端目录应在 Provider
+自己的 `initialize()` 或管理操作中更新到内存。这样服务注册、启用、禁用和删除
+会在下一次模型请求立即生效，不需要重建 `AgentTool` 或 `AgentCli`。
+
 Provider 只能声明自己的工具名称，不能覆盖 `run_shell`、`skill_find` 等内置名称；
-构造时发现重名会直接失败。`tools` 未传时，`AgentTool` 保持历史默认工具集合，新增
+解析工具面时发现重名会直接失败。`tools` 未传时，`AgentTool` 保持历史默认工具集合，新增
 预制工具与 Provider 工具不会意外暴露。显式传入 `tools` 后，它成为严格名称白名单。
 
 ## 通用产物

@@ -34,7 +34,13 @@ import {
   WORKSPACE_SEARCH_TOOL,
   WRITE_STDIN_TOOL
 } from "./tool-definitions.mjs";
-import { getProviderToolAvailability, isToolRequested, normalizeSelectedTools, normalizeToolProviders } from "./tool-provider.mjs";
+import {
+  getProviderToolAvailability,
+  isToolRequested,
+  normalizeSelectedTools,
+  normalizeToolProviders,
+  resolveProviderToolDescriptors
+} from "./tool-provider.mjs";
 import { createToolRegistry } from "./tool-registry.mjs";
 import { isWebProviderAvailable } from "./web-runtime.mjs";
 
@@ -67,7 +73,6 @@ export class AgentTool {
     this.skillRuntime = normalizedInput.skillRuntime;
     this.selectedTools = normalizeSelectedTools(normalizedInput.tools);
     this.toolProviders = normalizeToolProviders(normalizedInput.toolProviders);
-    assertProviderToolsDoNotShadowBuiltIns(this.toolProviders);
 
     const runtimeConfig = createRuntimeDependencyConfig(this.runtimeDependencies);
     this.config = resolveServiceConfig(process.env, {
@@ -120,7 +125,7 @@ export class AgentTool {
         timeoutMs: context.timeoutMs,
         maxOutputChars: context.maxOutputChars
       }
-    }, context.signal);
+    }, context.signal, context);
   }
 
   async diagnostics(context = {}) {
@@ -225,12 +230,10 @@ function selectModelToolSchemas({ config, runtimeDependencies, skillRuntime, ter
   add(VISUALIZATION_CREATE_CHART_TOOL);
   add(VISUALIZATION_CREATE_DASHBOARD_TOOL);
 
-  for (const providerEntry of toolProviders) {
-    for (const descriptor of providerEntry.descriptors) {
-      const availability = getProviderToolAvailability(providerEntry, descriptor);
-      if (availability.available && isToolRequested(descriptor.name, selectedTools, descriptor.defaultVisible)) {
-        tools.push(descriptor);
-      }
+  for (const { providerEntry, descriptor } of resolveProviderToolDescriptors(toolProviders, { reservedNames: BUILTIN_TOOL_NAMES })) {
+    const availability = getProviderToolAvailability(providerEntry, descriptor);
+    if (availability.available && isToolRequested(descriptor.name, selectedTools, descriptor.defaultVisible)) {
+      tools.push(descriptor);
     }
   }
   return tools.map((tool) => decorateToolSchemaForRuntime(tool.schema, config));
@@ -239,9 +242,8 @@ function selectModelToolSchemas({ config, runtimeDependencies, skillRuntime, ter
 function createCompositionChecks({ selectedTools, toolProviders, definitions }) {
   const visibleNames = new Set(definitions.map((definition) => definition?.function?.name).filter(Boolean));
   const knownNames = new Set(BUILTIN_TOOL_NAMES);
-  for (const provider of toolProviders) {
-    for (const descriptor of provider.descriptors) knownNames.add(descriptor.name);
-  }
+  const resolvedProviders = resolveProviderToolDescriptors(toolProviders, { reservedNames: BUILTIN_TOOL_NAMES });
+  for (const { descriptor } of resolvedProviders) knownNames.add(descriptor.name);
   const checks = [{
     id: "tool.composition",
     status: "pass",
@@ -276,20 +278,13 @@ function createCompositionChecks({ selectedTools, toolProviders, definitions }) 
       id: `tool.provider.${providerEntry.id}`,
       status: "pass",
       summary: `已注入 Tool Provider: ${providerEntry.id}`,
-      detail: providerEntry.descriptors.map((item) => item.name).join(", ")
+      detail: resolvedProviders
+        .filter((item) => item.providerEntry.id === providerEntry.id)
+        .map((item) => item.descriptor.name)
+        .join(", ")
     });
   }
   return checks;
-}
-
-function assertProviderToolsDoNotShadowBuiltIns(toolProviders) {
-  for (const providerEntry of toolProviders) {
-    for (const descriptor of providerEntry.descriptors) {
-      if (BUILTIN_TOOL_NAMES.has(descriptor.name)) {
-        throw new Error(`Tool Provider ${providerEntry.id} 不能覆盖内置工具: ${descriptor.name}`);
-      }
-    }
-  }
 }
 
 function hasSkillResourceApi(skillRuntime) {

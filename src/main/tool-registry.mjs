@@ -35,7 +35,33 @@ import { createTerminalSessionManager } from "./terminal-runtime.mjs";
 import { compressToolExecutionResult } from "./tool-result-compression.mjs";
 import { executeWebFetch, executeWebSearch, isWebProviderAvailable } from "./web-runtime.mjs";
 import { executeVisualizationCreateChart, executeVisualizationCreateDashboard } from "./visualization-runtime.mjs";
-import { getProviderToolAvailability, isToolRequested, normalizeSelectedTools, normalizeToolProviders } from "./tool-provider.mjs";
+import {
+  getProviderToolAvailability,
+  isToolRequested,
+  normalizeSelectedTools,
+  normalizeToolProviders,
+  resolveProviderToolDescriptors
+} from "./tool-provider.mjs";
+
+const BUILTIN_TOOL_NAMES = new Set([
+  RUN_SHELL_TOOL.name,
+  EXEC_COMMAND_TOOL.name,
+  WRITE_STDIN_TOOL.name,
+  WORKSPACE_SEARCH_TOOL.name,
+  SKILL_FIND_TOOL.name,
+  SKILL_ACTIVATE_TOOL.name,
+  SKILL_RESOURCE_TOOL.name,
+  WEB_SEARCH_TOOL.name,
+  WEB_FETCH_TOOL.name,
+  EMAIL_SEND_TOOL.name,
+  IMAGE_PRESENT_TOOL.name,
+  ECOMMERCE_IMAGE_GENERATE_TOOL.name,
+  ECOMMERCE_IMAGE_EDIT_TOOL.name,
+  ECOMMERCE_IMAGE_BATCH_TOOL.name,
+  ECOMMERCE_IMAGE_LIST_TOOL.name,
+  VISUALIZATION_CREATE_CHART_TOOL.name,
+  VISUALIZATION_CREATE_DASHBOARD_TOOL.name
+]);
 
 export async function createToolRegistry(config, options = {}) {
   const rgAvailability = await isRgAvailable(config.rgBin);
@@ -100,33 +126,28 @@ export async function createToolRegistry(config, options = {}) {
   addTool(VISUALIZATION_CREATE_CHART_TOOL, executeVisualizationCreateChart);
   addTool(VISUALIZATION_CREATE_DASHBOARD_TOOL, executeVisualizationCreateDashboard);
 
-  for (const providerEntry of providerEntries) {
-    for (const descriptor of providerEntry.descriptors) {
-      const availability = getProviderToolAvailability(providerEntry, descriptor);
-      addTool(descriptor, (call, currentConfig, signal) => providerEntry.provider.execute(call.toolName, call.arguments ?? {}, {
-        workspace: call.workspace?.root,
-        toolCallId: call.toolCallId,
-        signal,
-        config: currentConfig
-      }), availability.available);
-    }
-  }
-
   return {
-    tools,
+    get tools() {
+      return [...tools, ...readVisibleProviderTools()];
+    },
     get manifest() {
       // write_stdin 只有存在运行中会话时才向 HTTP 客户端暴露，和对象模式一致。
-      const manifestTools = terminalManager.stats().running > 0
+      const builtinManifestTools = terminalManager.stats().running > 0
         ? tools
         : tools.filter((tool) => tool.name !== WRITE_STDIN_TOOL.name);
-      return createAgentToolManifest({ version: brickDefinition.version, config, tools: manifestTools });
+      return createAgentToolManifest({
+        version: brickDefinition.version,
+        config,
+        tools: [...builtinManifestTools, ...readVisibleProviderTools()]
+      });
     },
     has(name) {
-      return executors.has(name);
+      return executors.has(name) || Boolean(resolveVisibleProviderTool(name));
     },
-    async execute(call, signal) {
-      const executor = executors.get(call.toolName);
-      if (!executor) {
+    async execute(call, signal, context = {}) {
+      const builtinExecutor = executors.get(call.toolName);
+      const providerTool = builtinExecutor ? undefined : resolveVisibleProviderTool(call.toolName);
+      if (!builtinExecutor && !providerTool) {
         return {
           status: "blocked",
           content: `Unknown or unavailable tool: ${call.toolName}`,
@@ -143,7 +164,15 @@ export async function createToolRegistry(config, options = {}) {
       }
       let execution;
       try {
-        execution = await executor(call, config, signal);
+        execution = builtinExecutor
+          ? await builtinExecutor(call, config, signal)
+          : await providerTool.providerEntry.provider.execute(call.toolName, call.arguments ?? {}, {
+            ...context,
+            workspace: call.workspace?.root,
+            toolCallId: call.toolCallId,
+            signal,
+            config
+          });
       } catch (error) {
         execution = createExecutionFailureResult(call, signal, error);
       }
@@ -155,6 +184,24 @@ export async function createToolRegistry(config, options = {}) {
       }).result;
     }
   };
+
+  function readVisibleProviderTools() {
+    return resolveProviderToolDescriptors(providerEntries, { reservedNames: BUILTIN_TOOL_NAMES })
+      .filter(({ providerEntry, descriptor }) => {
+        const availability = getProviderToolAvailability(providerEntry, descriptor);
+        return availability.available && isToolRequested(descriptor.name, selectedTools, descriptor.defaultVisible);
+      })
+      .map(({ descriptor }) => descriptor);
+  }
+
+  function resolveVisibleProviderTool(name) {
+    return resolveProviderToolDescriptors(providerEntries, { reservedNames: BUILTIN_TOOL_NAMES })
+      .find(({ providerEntry, descriptor }) => {
+        if (descriptor.name !== name) return false;
+        const availability = getProviderToolAvailability(providerEntry, descriptor);
+        return availability.available && isToolRequested(descriptor.name, selectedTools, descriptor.defaultVisible);
+      });
+  }
 }
 
 function normalizeSkillRuntime(value) {
