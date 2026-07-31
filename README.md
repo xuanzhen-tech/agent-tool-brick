@@ -105,7 +105,7 @@ const agentTool = new AgentTool({
 
 ## 电商图片工具
 
-电商图片能力位于 AgentTool 内，不是独立 Brick。四个工具默认隐藏，产品只有把名称放进现有 `tools` 白名单后，模型才会看到并调用：
+电商图片能力位于 AgentTool 内，不是独立 Brick。工具默认隐藏，产品只有把名称放进现有 `tools` 白名单后，模型才会看到并调用：
 
 ```js
 const agentTool = new AgentTool({
@@ -114,7 +114,6 @@ const agentTool = new AgentTool({
   tools: [
     "ecommerce_image_generate",
     "ecommerce_image_edit",
-    "ecommerce_image_batch",
     "ecommerce_image_list"
   ]
 });
@@ -138,13 +137,15 @@ const submitted = await agentTool.execute("ecommerce_image_generate", {
 }, { workspace });
 ```
 
-提交立即返回 `batchId`。使用 `ecommerce_image_batch` 的 `status` 轮询，`waitMs` 最多 30000；`cancel` 会保留已完成图片，`retry` 只复制 failed/interrupted 项创建新批次。生成结果写入 `outputs/ecommerce-images/`，每张图片都是 `agent-output.v1`、`renderer=ecommerce-image` 的独立 artifact。
+`ecommerce_image_generate` 和 `ecommerce_image_edit` 会在一次工具调用内完成排队、内部重试、等待、落盘和验证。单图与多图都只向模型返回最终成功、失败或中断结果，不返回 `queued/running`，也不要求模型保存 `operationId` 或轮询状态。只有 `deliveryReady=true` 且存在 artifact 时才代表图片可交付。
 
-编辑必须指定 `assetId` 和明确的历史 `versionId`。它会把目标版本、修改意见和可选额外参考图重新提交给 GPT Image 2，并在同一资产下创建 `v2`、`v3` 等新版本；原文件永不覆盖。`ecommerce_image_list` 可按 batch、asset 或状态查询，asset 查询返回完整父版本、参数、workspace 相对路径和内容哈希。
+批次总预算按 `ceil(图片数 / 2) × 390 秒 + 30 秒` 计算，最多 9 张时约 33 分钟。用户中断由 AgentCli 的 `AbortSignal` 直接终止本地批次；已经发给同步上游的请求仍可能继续生成或计费。`ecommerce_image_job_status/cancel/retry` 和旧 `ecommerce_image_batch` 只保留为 SDK/HTTP 兼容与排障入口，不进入模型 definitions。生成结果写入 `outputs/ecommerce-images/`，每张图片都是 `agent-output.v1`、`renderer=ecommerce-image` 的独立 artifact。
+
+编辑必须指定 `assetId` 和明确的历史 `versionId`。它会把目标版本、修改意见和可选额外参考图重新提交给 GPT Image 2，并在同一资产下创建 `v2`、`v3` 等新版本；原文件永不覆盖。`versionId` 只在所属 `assetId` 内递增，不能根据对话中的生成次数推断全局 V5。`ecommerce_image_list` 可按 batch、asset 或状态查询，asset 查询返回完整父版本、参数、workspace 相对路径和内容哈希。
 
 参考图只接受当前 workspace 内的 PNG/JPEG/WebP。运行时通过 realpath 阻止路径和符号链接越界，每张最多 10MB、每个 job 最多 5 张且合计最多 30MB；内容按 SHA-256 去重到 `outputs/ecommerce-images/sources/`。AgentTool 不保存 provider key，图片通过 multipart 发送到 Server Tool Gateway。
 
-单张图片最多等待 390 秒，Gateway 应在 360 秒内结束 provider 请求，生产反向代理应至少允许 420 秒。只有 Gateway 明确返回 `retryable: true` 时才会自动重试；网络断开、超时和取消后的上游结果未知，不会自动重试。取消运行中批次时，调用结果会明确提示已发出的同步请求仍可能继续生成并计费。
+单个图片任务的 390 秒预算覆盖全部内部重试，Gateway 应在 360 秒内结束单次 provider 请求，生产反向代理应至少允许 420 秒。只有 Gateway 明确返回 `retryable: true` 时才会在总预算内自动重试；网络断开、超时和取消后的上游结果未知，不会自动重放。同一 `toolCallId` 的相同请求会复用已持久化任务，不会重复计费；相同 ID 携带不同参数会被拒绝。
 
 图表工具真实生成 Vega-Lite JSON、SVG、PNG 和 manifest；看板工具真实生成结构化 JSON、
 HTML、图表文件和 manifest。所有正式文件固定写到 `outputs/visualizations/`，并通过

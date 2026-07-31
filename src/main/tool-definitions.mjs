@@ -589,13 +589,13 @@ const ECOMMERCE_IMAGE_REFERENCE_SCHEMA = {
 
 export const ECOMMERCE_IMAGE_GENERATE_TOOL = {
   name: "ecommerce_image_generate",
-  description: "异步提交一个电商图片需求，并用同一模型和同一组参数生成 count 张独立、可继续编辑的图片资产。",
+  description: "生成电商图片并在当前工具调用内管理排队、重试、等待、落盘和验证；模型只会收到最终成功、失败或中断结果。",
   defaultVisible: false,
   schema: {
     type: "function",
     function: {
       name: "ecommerce_image_generate",
-      description: "提交一个 GPT Image 2 电商图片需求。count 只表示同一模型生成的独立图片数量，不存在模型分组、矩阵、行列或拼图语义。",
+      description: "生成 GPT Image 2 电商图片。单图和多图都由工具阻塞到批次终态；只有 deliveryReady=true 且返回 artifact 时才代表图片可交付，不需要调用状态、取消或重试工具。",
       parameters: {
         type: "object",
         additionalProperties: false,
@@ -634,19 +634,19 @@ export const ECOMMERCE_IMAGE_GENERATE_TOOL = {
     }
   },
   permissions: ["workspace.read", "workspace.write", "network.image.generate"],
-  timeoutMs: 30_000,
+  timeoutMs: 1_980_000,
   cancelable: true
 };
 
 export const ECOMMERCE_IMAGE_EDIT_TOOL = {
   name: "ecommerce_image_edit",
-  description: "基于任意已有资产版本异步生成新版本，不覆盖原图片。",
+  description: "基于任意已有资产版本生成新版本，并在当前工具调用内管理完整执行状态；不覆盖原图片。",
   defaultVisible: false,
   schema: {
     type: "function",
     function: {
       name: "ecommerce_image_edit",
-      description: "把目标版本、修改意见和可选参考图重新提交给 GPT Image 2。每项 edit 只生成一张同 assetId 的新版本。",
+      description: "把目标版本、修改意见和可选参考图提交给 GPT Image 2。工具会等待整个编辑批次终结；只有 deliveryReady=true 才可交付，versionId 只在所属 assetId 内递增。",
       parameters: {
         type: "object",
         additionalProperties: false,
@@ -685,25 +685,29 @@ export const ECOMMERCE_IMAGE_EDIT_TOOL = {
     }
   },
   permissions: ["workspace.read", "workspace.write", "network.image.generate"],
-  timeoutMs: 30_000,
+  timeoutMs: 1_980_000,
   cancelable: true
 };
 
 export const ECOMMERCE_IMAGE_BATCH_TOOL = {
   name: "ecommerce_image_batch",
-  description: "查询、取消或重试电商图片异步批次。",
+  description: "SDK/HTTP 兼容入口：查询、取消或重试历史电商图片批次；不向模型暴露。",
   defaultVisible: false,
   schema: {
     type: "function",
     function: {
       name: "ecommerce_image_batch",
-      description: "status 可长轮询最多 30 秒；cancel 保留已完成图片；retry 只复制失败或中断项创建新批次。",
+      description: "兼容入口。省略 action 时默认查询 status；cancel 保留已完成图片；retry 只复制失败或中断项创建新批次。",
       parameters: {
         type: "object",
         additionalProperties: false,
-        required: ["action", "batchId"],
+        required: ["batchId"],
         properties: {
-          action: { type: "string", enum: ["status", "cancel", "retry"] },
+          action: {
+            type: "string",
+            enum: ["status", "cancel", "retry"],
+            description: "兼容动作，默认 status。新调用应改用专用 job 工具。"
+          },
           batchId: { type: "string" },
           waitMs: {
             type: "integer",
@@ -720,6 +724,93 @@ export const ECOMMERCE_IMAGE_BATCH_TOOL = {
   cancelable: true
 };
 
+export const ECOMMERCE_IMAGE_JOB_STATUS_TOOL = {
+  name: "ecommerce_image_job_status",
+  description: "SDK/HTTP 诊断入口：查询电商图片任务状态；不向模型暴露。",
+  defaultVisible: false,
+  schema: {
+    type: "function",
+    function: {
+      name: "ecommerce_image_job_status",
+      description: "根据 operationId 查询图片任务。只有 deliveryReady=true 且存在 artifact 时才能向用户报告图片已完成。",
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        required: ["operationId"],
+        properties: {
+          operationId: {
+            type: "string",
+            description: "generate、edit 或 retry 返回的 operationId。"
+          },
+          waitMs: {
+            type: "integer",
+            minimum: 0,
+            maximum: 30_000,
+            description: "最长等待任务状态变化并持续检查到终态的时间，默认 30000。"
+          }
+        }
+      }
+    }
+  },
+  permissions: ["workspace.read"],
+  timeoutMs: 35_000,
+  cancelable: true
+};
+
+export const ECOMMERCE_IMAGE_JOB_CANCEL_TOOL = {
+  name: "ecommerce_image_job_cancel",
+  description: "SDK/HTTP 诊断入口：取消图片任务并保留已经完成的图片；不向模型暴露。",
+  defaultVisible: false,
+  schema: {
+    type: "function",
+    function: {
+      name: "ecommerce_image_job_cancel",
+      description: "根据 operationId 取消图片任务。上游是同步生图接口，已经发送的请求仍可能继续生成并计费。",
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        required: ["operationId"],
+        properties: {
+          operationId: {
+            type: "string",
+            description: "generate、edit 或 retry 返回的 operationId。"
+          }
+        }
+      }
+    }
+  },
+  permissions: ["workspace.read", "workspace.write", "network.image.generate"],
+  timeoutMs: 10_000,
+  cancelable: true
+};
+
+export const ECOMMERCE_IMAGE_JOB_RETRY_TOOL = {
+  name: "ecommerce_image_job_retry",
+  description: "SDK/HTTP 兼容入口：重试历史任务中的 failed/interrupted 项目；不向模型暴露。",
+  defaultVisible: false,
+  schema: {
+    type: "function",
+    function: {
+      name: "ecommerce_image_job_retry",
+      description: "根据 operationId 重试可恢复的失败项，返回新的 operationId；不会覆盖已经完成的图片。",
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        required: ["operationId"],
+        properties: {
+          operationId: {
+            type: "string",
+            description: "需要重试的原 operationId。"
+          }
+        }
+      }
+    }
+  },
+  permissions: ["workspace.read", "workspace.write", "network.image.generate"],
+  timeoutMs: 1_980_000,
+  cancelable: true
+};
+
 export const ECOMMERCE_IMAGE_LIST_TOOL = {
   name: "ecommerce_image_list",
   description: "查询电商图片批次或资产的不可覆盖版本历史。",
@@ -728,7 +819,7 @@ export const ECOMMERCE_IMAGE_LIST_TOOL = {
     type: "function",
     function: {
       name: "ecommerce_image_list",
-      description: "按 batchId、assetId 或状态查询。assetId 查询会返回完整版本、父版本、模型参数、workspace 相对路径和内容哈希。",
+      description: "按 batchId、assetId 或状态查询。versionId 只在所属 assetId 内有效；不要根据对话轮次推断全局 V1/V2/V3。",
       parameters: {
         type: "object",
         additionalProperties: false,

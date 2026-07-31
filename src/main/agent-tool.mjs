@@ -8,6 +8,7 @@
  */
 
 import { brickDefinition } from "../brick-definition.mjs";
+import crypto from "node:crypto";
 import { createDiagnosticsReport } from "./diagnostics.mjs";
 import { createEcommerceImageRuntime } from "./ecommerce-image-runtime.mjs";
 import { isEmailProviderAvailable } from "./email-runtime.mjs";
@@ -20,6 +21,9 @@ import {
   ECOMMERCE_IMAGE_BATCH_TOOL,
   ECOMMERCE_IMAGE_EDIT_TOOL,
   ECOMMERCE_IMAGE_GENERATE_TOOL,
+  ECOMMERCE_IMAGE_JOB_CANCEL_TOOL,
+  ECOMMERCE_IMAGE_JOB_RETRY_TOOL,
+  ECOMMERCE_IMAGE_JOB_STATUS_TOOL,
   ECOMMERCE_IMAGE_LIST_TOOL,
   EXEC_COMMAND_TOOL,
   IMAGE_PRESENT_TOOL,
@@ -59,6 +63,9 @@ const BUILTIN_TOOL_NAMES = new Set([
   ECOMMERCE_IMAGE_GENERATE_TOOL.name,
   ECOMMERCE_IMAGE_EDIT_TOOL.name,
   ECOMMERCE_IMAGE_BATCH_TOOL.name,
+  ECOMMERCE_IMAGE_JOB_STATUS_TOOL.name,
+  ECOMMERCE_IMAGE_JOB_CANCEL_TOOL.name,
+  ECOMMERCE_IMAGE_JOB_RETRY_TOOL.name,
   ECOMMERCE_IMAGE_LIST_TOOL.name,
   IMAGE_PRESENT_TOOL.name,
   VISUALIZATION_CREATE_CHART_TOOL.name,
@@ -115,7 +122,7 @@ export class AgentTool {
     const registry = await this.getRegistry();
     return await registry.execute({
       schemaVersion: TOOL_CALL_SCHEMA_VERSION,
-      toolCallId: context.toolCallId ?? context.tool_call_id ?? `call-${Date.now().toString(36)}`,
+      toolCallId: context.toolCallId ?? context.tool_call_id ?? `call-${crypto.randomUUID()}`,
       toolName,
       arguments: parseToolArguments(args),
       workspace: {
@@ -225,7 +232,6 @@ function selectModelToolSchemas({ config, runtimeDependencies, skillRuntime, ter
   add(IMAGE_PRESENT_TOOL, isImagePresentAvailable().available);
   add(ECOMMERCE_IMAGE_GENERATE_TOOL, Boolean(ecommerceImageRuntime));
   add(ECOMMERCE_IMAGE_EDIT_TOOL, Boolean(ecommerceImageRuntime));
-  add(ECOMMERCE_IMAGE_BATCH_TOOL, Boolean(ecommerceImageRuntime));
   add(ECOMMERCE_IMAGE_LIST_TOOL, Boolean(ecommerceImageRuntime));
   add(VISUALIZATION_CREATE_CHART_TOOL);
   add(VISUALIZATION_CREATE_DASHBOARD_TOOL);

@@ -19,6 +19,7 @@ const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 const MAX_REFERENCE_BYTES = 30 * 1024 * 1024;
 const MAX_WAIT_MS = 30_000;
 const SINGLE_IMAGE_TIMEOUT_MS = 390_000;
+const BATCH_SETTLE_MS = 30_000;
 const MAX_RETRIES = 2;
 const CONCURRENCY = 2;
 const TERMINAL_ITEM_STATUSES = new Set(["completed", "failed", "cancelled", "interrupted"]);
@@ -39,8 +40,8 @@ const PRESERVE_MODES = new Set(["strict", "balanced", "loose"]);
 const QUALITY_VALUES = new Set(["auto", "low", "medium", "high"]);
 const OUTPUT_FORMATS = new Set(["png", "jpeg", "webp"]);
 
-export function createEcommerceImageRuntime(config) {
-  return new EcommerceImageRuntime(config);
+export function createEcommerceImageRuntime(config, options = {}) {
+  return new EcommerceImageRuntime(config, options);
 }
 
 export class EcommerceImageRuntime {
@@ -50,128 +51,171 @@ export class EcommerceImageRuntime {
     this.queue = [];
     this.running = 0;
     this.controllers = new Map();
+    this.workerPromises = new Map();
     this.workspaceInitializers = new Map();
     this.batchWaiters = new Map();
     this.batchLocks = new Map();
     this.assetLocks = new Map();
+    this.idempotencyLocks = new Map();
+    this.interruptedItems = new Set();
+    // 测试可以缩短执行预算；产品构造面不暴露这些运行时细节。
+    this.imageTimeoutMs = options.imageTimeoutMs ?? SINGLE_IMAGE_TIMEOUT_MS;
+    this.batchSettleMs = options.batchSettleMs ?? BATCH_SETTLE_MS;
     this.disposed = false;
   }
 
   async generate(call) {
-    this.#assertActive();
-    const workspace = await this.#initializeWorkspace(resolveWorkspace(call));
-    const input = await normalizeGenerateInput(call.arguments ?? {}, workspace);
-    const batch = {
-      schemaVersion: SCHEMA_VERSION,
-      batchId: createId("batch"),
-      type: "generate",
-      modelId: input.modelId,
-      status: "queued",
-      createdAt: nowIso(),
-      updatedAt: nowIso(),
-      count: input.count,
-      output: input.output,
-      items: []
-    };
-
-    for (let outputIndex = 1; outputIndex <= input.count; outputIndex += 1) {
-      const assetId = createId("asset");
-      const item = {
-        itemId: createId("item"),
-        kind: "generate",
-        status: "queued",
-        outputIndex,
-        prompt: input.prompt,
-        size: input.size,
-        quality: input.quality,
-        output: input.output,
-        references: input.references,
-        assetId,
-        versionId: "v1",
-        attempts: 0,
-        createdAt: nowIso(),
-        updatedAt: nowIso()
-      };
-      batch.items.push(item);
-      await this.#writeAssetManifest(workspace, createAssetManifest({
-        assetId,
-        batchId: batch.batchId,
-        item
-      }));
-    }
-
-    await this.#writeBatch(workspace, batch);
-    this.#enqueueBatch(workspace, batch.batchId, batch.items.map((item) => item.itemId));
-    return queuedResult(call, batch);
+    const submission = await this.#submitGenerate(call);
+    return await this.#waitForSubmittedOperation(call, submission);
   }
 
   async edit(call) {
+    const submission = await this.#submitEdit(call);
+    return await this.#waitForSubmittedOperation(call, submission);
+  }
+
+  async jobStatus(call) {
+    const workspace = await this.#initializeWorkspace(resolveWorkspace(call));
+    const input = normalizeJobInput(call.arguments ?? {}, { wait: true });
+    const batch = await this.#waitForBatchTerminal(
+      workspace,
+      input.operationId,
+      input.waitMs,
+      call.signal
+    );
+    return operationResult(call, batch);
+  }
+
+  async jobCancel(call) {
+    const workspace = await this.#initializeWorkspace(resolveWorkspace(call));
+    const input = normalizeJobInput(call.arguments ?? {});
+    const batch = await this.#cancelBatchState(workspace, input.operationId);
+    return operationResult(call, batch, { action: "cancel" });
+  }
+
+  async jobRetry(call) {
+    const workspace = await this.#initializeWorkspace(resolveWorkspace(call));
+    const input = normalizeJobInput(call.arguments ?? {});
+    const submission = await this.#retryBatchState(call, workspace, input.operationId);
+    return await this.#waitForSubmittedOperation(call, submission);
+  }
+
+  async #submitGenerate(call) {
     this.#assertActive();
     const workspace = await this.#initializeWorkspace(resolveWorkspace(call));
-    const input = await normalizeEditInput(call.arguments ?? {}, workspace);
-    const batch = {
-      schemaVersion: SCHEMA_VERSION,
-      batchId: createId("batch"),
-      type: "edit",
-      modelId: input.modelId,
-      status: "queued",
-      createdAt: nowIso(),
-      updatedAt: nowIso(),
-      output: input.output,
-      items: []
-    };
+    const input = await normalizeGenerateInput(call.arguments ?? {}, workspace);
+    const idempotencyType = call.idempotencyOperation ?? "generate";
+    return await this.#withIdempotentSubmission(call, workspace, idempotencyType, input, async (identity) => {
+      const batch = {
+        schemaVersion: SCHEMA_VERSION,
+        batchId: createId("batch"),
+        type: "generate",
+        modelId: input.modelId,
+        status: "queued",
+        createdAt: nowIso(),
+        updatedAt: nowIso(),
+        count: input.count,
+        output: input.output,
+        ...identity,
+        items: []
+      };
 
-    for (let index = 0; index < input.edits.length; index += 1) {
-      const edit = input.edits[index];
-      const item = await this.#withAssetLock(workspace, edit.assetId, async () => {
-        const asset = await this.#readAssetManifest(workspace, edit.assetId);
-        const sourceVersion = asset.versions.find((version) => version.versionId === edit.versionId);
-        if (!sourceVersion || sourceVersion.status !== "completed" || !sourceVersion.path) {
-          throw invalidInput("ecommerce_image_version_not_found", `资产 ${edit.assetId} 不存在可编辑版本 ${edit.versionId}。`);
-        }
-        const versionId = nextVersionId(asset.versions);
-        const nextItem = {
+      for (let outputIndex = 1; outputIndex <= input.count; outputIndex += 1) {
+        const assetId = createId("asset");
+        const item = {
           itemId: createId("item"),
-          kind: "edit",
+          kind: "generate",
           status: "queued",
-          editIndex: index + 1,
-          prompt: edit.prompt,
-          size: edit.size,
-          quality: edit.quality,
+          outputIndex,
+          prompt: input.prompt,
+          size: input.size,
+          quality: input.quality,
           output: input.output,
-          references: edit.references,
-          sourcePath: sourceVersion.path,
-          assetId: edit.assetId,
-          versionId,
-          parentVersionId: edit.versionId,
+          references: input.references,
+          assetId,
+          versionId: "v1",
           attempts: 0,
           createdAt: nowIso(),
           updatedAt: nowIso()
         };
-        asset.versions.push(createAssetVersion({ batchId: batch.batchId, item: nextItem }));
-        asset.updatedAt = nowIso();
-        await this.#writeAssetManifest(workspace, asset);
-        return nextItem;
-      });
-      batch.items.push(item);
-    }
+        batch.items.push(item);
+        await this.#writeAssetManifest(workspace, createAssetManifest({
+          assetId,
+          batchId: batch.batchId,
+          item
+        }));
+      }
+      return batch;
+    });
+  }
 
-    await this.#writeBatch(workspace, batch);
-    this.#enqueueBatch(workspace, batch.batchId, batch.items.map((item) => item.itemId));
-    return queuedResult(call, batch);
+  async #submitEdit(call) {
+    this.#assertActive();
+    const workspace = await this.#initializeWorkspace(resolveWorkspace(call));
+    const input = await normalizeEditInput(call.arguments ?? {}, workspace);
+    const idempotencyType = call.idempotencyOperation ?? "edit";
+    return await this.#withIdempotentSubmission(call, workspace, idempotencyType, input, async (identity) => {
+      const batch = {
+        schemaVersion: SCHEMA_VERSION,
+        batchId: createId("batch"),
+        type: "edit",
+        modelId: input.modelId,
+        status: "queued",
+        createdAt: nowIso(),
+        updatedAt: nowIso(),
+        output: input.output,
+        ...identity,
+        items: []
+      };
+
+      for (let index = 0; index < input.edits.length; index += 1) {
+        const edit = input.edits[index];
+        const item = await this.#withAssetLock(workspace, edit.assetId, async () => {
+          const asset = await this.#readAssetManifest(workspace, edit.assetId);
+          const sourceVersion = asset.versions.find((version) => version.versionId === edit.versionId);
+          if (!sourceVersion || sourceVersion.status !== "completed" || !sourceVersion.path) {
+            throw invalidInput("ecommerce_image_version_not_found", `资产 ${edit.assetId} 不存在可编辑版本 ${edit.versionId}。`);
+          }
+          const versionId = nextVersionId(asset.versions);
+          const nextItem = {
+            itemId: createId("item"),
+            kind: "edit",
+            status: "queued",
+            editIndex: index + 1,
+            prompt: edit.prompt,
+            size: edit.size,
+            quality: edit.quality,
+            output: input.output,
+            references: edit.references,
+            sourcePath: sourceVersion.path,
+            assetId: edit.assetId,
+            versionId,
+            parentVersionId: edit.versionId,
+            attempts: 0,
+            createdAt: nowIso(),
+            updatedAt: nowIso()
+          };
+          asset.versions.push(createAssetVersion({ batchId: batch.batchId, item: nextItem }));
+          asset.updatedAt = nowIso();
+          await this.#writeAssetManifest(workspace, asset);
+          return nextItem;
+        });
+        batch.items.push(item);
+      }
+      return batch;
+    });
   }
 
   async batch(call) {
     const workspace = await this.#initializeWorkspace(resolveWorkspace(call));
     const input = normalizeBatchInput(call.arguments ?? {});
-    if (input.action === "cancel") return await this.#cancelBatch(call, workspace, input.batchId);
-    if (input.action === "retry") return await this.#retryBatch(call, workspace, input.batchId);
-
-    let batch = await this.#readBatch(workspace, input.batchId);
-    if (input.waitMs > 0 && !TERMINAL_BATCH_STATUSES.has(batch.status)) {
-      await this.#waitForBatch(workspace, input.batchId, input.waitMs, call.signal);
-      batch = await this.#readBatch(workspace, input.batchId);
+    if (input.action === "cancel") return batchStatusResult(call, await this.#cancelBatchState(workspace, input.batchId));
+    if (input.action === "retry") {
+      const submission = await this.#retryBatchState(call, workspace, input.batchId);
+      return queuedResult(call, submission.batch);
     }
+
+    const batch = await this.#waitForBatchTerminal(workspace, input.batchId, input.waitMs, call.signal);
     return batchStatusResult(call, batch);
   }
 
@@ -248,7 +292,8 @@ export class EcommerceImageRuntime {
     await Promise.all([
       fs.mkdir(paths.sources, { recursive: true }),
       fs.mkdir(paths.batches, { recursive: true }),
-      fs.mkdir(paths.assets, { recursive: true })
+      fs.mkdir(paths.assets, { recursive: true }),
+      fs.mkdir(paths.idempotency, { recursive: true })
     ]);
     const entries = await fs.readdir(paths.batches, { withFileTypes: true });
     for (const entry of entries) {
@@ -281,11 +326,15 @@ export class EcommerceImageRuntime {
   #drainQueue() {
     while (!this.disposed && this.running < CONCURRENCY && this.queue.length > 0) {
       const entry = this.queue.shift();
+      const key = itemKey(entry.workspace, entry.batchId, entry.itemId);
       this.running += 1;
-      void this.#runQueueItem(entry).finally(() => {
+      const workerPromise = this.#runQueueItem(entry).finally(() => {
         this.running -= 1;
+        this.workerPromises.delete(key);
         this.#drainQueue();
       });
+      this.workerPromises.set(key, workerPromise);
+      void workerPromise;
     }
   }
 
@@ -309,19 +358,35 @@ export class EcommerceImageRuntime {
       if (!item) return;
       await this.#updateAssetVersion(entry.workspace, item);
 
-      const response = await retryTransient(async () => {
-        item.attempts += 1;
-        await this.#persistItem(entry.workspace, entry.batchId, item);
-        return await this.#requestImage(entry.workspace, item, controller.signal);
-      }, controller.signal);
+      // 单个图片任务的 390 秒预算覆盖全部内部重试，避免三次慢请求把
+      // 模型工具调用意外拖长到近二十分钟。
+      const response = await withTimeout(
+        (timeoutSignal) => retryTransient(async () => {
+          item.attempts += 1;
+          await this.#persistItem(entry.workspace, entry.batchId, item);
+          return await this.#requestImage(entry.workspace, item, timeoutSignal);
+        }, timeoutSignal),
+        this.imageTimeoutMs,
+        controller.signal
+      );
+      if (controller.signal.aborted) throw controller.signal.reason ?? new Error("图片任务已取消。");
       const outputBytes = decodeOutputImage(response, item.output.format);
       const outputPath = assetVersionPath(item.assetId, item.versionId, response.mimeType);
-      await atomicWriteBuffer(path.join(entry.workspace, ...outputPath.split("/")), outputBytes);
+      const absoluteOutputPath = path.join(entry.workspace, ...outputPath.split("/"));
+      await atomicWriteBuffer(absoluteOutputPath, outputBytes);
+      const verifiedOutput = await verifyStoredOutput(
+        absoluteOutputPath,
+        response.mimeType,
+        outputBytes
+      ).catch(async (error) => {
+        await fs.rm(absoluteOutputPath, { force: true }).catch(() => undefined);
+        throw error;
+      });
       item.status = "completed";
       item.path = outputPath;
-      item.mimeType = response.mimeType;
-      item.bytes = outputBytes.byteLength;
-      item.contentHash = sha256(outputBytes);
+      item.mimeType = verifiedOutput.mimeType;
+      item.bytes = verifiedOutput.bytes;
+      item.contentHash = verifiedOutput.contentHash;
       item.providerRequestId = response.providerRequestId;
       item.finishedAt = nowIso();
       item.updatedAt = nowIso();
@@ -329,12 +394,13 @@ export class EcommerceImageRuntime {
       await this.#persistItem(entry.workspace, entry.batchId, item);
     } catch (error) {
       const cancelled = controller.signal.aborted;
-      const interrupted = cancelled && this.disposed;
+      const interrupted = cancelled && (this.disposed || this.interruptedItems.has(key));
       await this.#markItemTerminal(entry.workspace, entry.batchId, entry.itemId, {
         status: cancelled ? (interrupted ? "interrupted" : "cancelled") : "failed",
         error: normalizeFailure(error, { cancelled, interrupted })
       });
     } finally {
+      this.interruptedItems.delete(key);
       this.controllers.delete(key);
     }
   }
@@ -357,11 +423,7 @@ export class EcommerceImageRuntime {
     const endpoint = item.kind === "edit" || images.length > 0
       ? "/api/tools/ecommerce/images/edit"
       : "/api/tools/ecommerce/images/generate";
-    return await withTimeout(
-      (timeoutSignal) => this.fetchImage(this.config, endpoint, { request, images }, timeoutSignal),
-      SINGLE_IMAGE_TIMEOUT_MS,
-      signal
-    );
+    return await this.fetchImage(this.config, endpoint, { request, images }, signal);
   }
 
   async #persistItem(workspace, batchId, currentItem) {
@@ -393,13 +455,145 @@ export class EcommerceImageRuntime {
     if (!item) return;
   }
 
-  async #cancelBatch(call, workspace, batchId) {
+  async #waitForSubmittedOperation(call, submission) {
+    const waitMs = calculateBatchWaitMs(
+      submission.batch.items.length,
+      this.imageTimeoutMs,
+      this.batchSettleMs
+    );
+    try {
+      const batch = await this.#waitForBatchTerminal(
+        submission.workspace,
+        submission.batch.batchId,
+        waitMs,
+        call.signal
+      );
+      if (!TERMINAL_BATCH_STATUSES.has(batch.status)) {
+        const timedOutBatch = await this.#timeoutBatchState(
+          submission.workspace,
+          submission.batch.batchId,
+          waitMs
+        );
+        return operationResult(call, timedOutBatch, { forceInterrupted: true });
+      }
+      return operationResult(call, batch);
+    } catch (error) {
+      if (!call.signal?.aborted) throw error;
+      const batch = await this.#interruptBatchState(submission.workspace, submission.batch.batchId);
+      return operationResult(call, batch, { forceInterrupted: true });
+    }
+  }
+
+  async #timeoutBatchState(workspace, batchId, waitMs) {
+    const interruptedItems = [];
+    await this.#withBatchLock(workspace, batchId, async () => {
+      const batch = await this.#readBatch(workspace, batchId);
+      for (const item of batch.items) {
+        if (!["queued", "running"].includes(item.status)) continue;
+        item.status = "interrupted";
+        item.error = {
+          code: "ecommerce_image_batch_timeout",
+          message: `图片批次在 ${waitMs}ms 总预算内未完成。已发出的上游请求结果未知，不能自动重试，并且仍可能继续生成或计费。`,
+          retryable: false
+        };
+        item.finishedAt = nowIso();
+        item.updatedAt = nowIso();
+        interruptedItems.push(item);
+      }
+      batch.status = deriveBatchStatus(batch.items);
+      batch.updatedAt = nowIso();
+      await this.#writeBatch(workspace, batch, { notify: false });
+    });
+    for (const item of interruptedItems) {
+      await this.#updateAssetVersion(workspace, item);
+      const key = itemKey(workspace, batchId, item.itemId);
+      this.interruptedItems.add(key);
+      this.controllers.get(key)?.abort("图片批次超过总执行预算。");
+    }
+    this.queue = this.queue.filter((entry) => !(entry.workspace === workspace && entry.batchId === batchId));
+    this.#notifyBatch(workspace, batchId);
+    await this.#waitForBatchWorkers(workspace, batchId);
+    return await this.#readBatch(workspace, batchId);
+  }
+
+  async #withIdempotentSubmission(call, workspace, type, input, createBatch) {
+    const idempotencyKey = normalizeIdempotencyKey(call.toolCallId);
+    const requestHash = sha256(JSON.stringify({ type, input }));
+    const lockKey = `${workspace}\0${idempotencyKey}`;
+    return await this.#withIdempotencyLock(lockKey, async () => {
+      const mappingPath = idempotencyMappingPath(workspace, idempotencyKey);
+      const existing = await readOptionalJson(mappingPath);
+      if (existing) {
+        if (existing.requestHash !== requestHash || existing.type !== type) {
+          throw invalidInput(
+            "ecommerce_image_idempotency_conflict",
+            "同一 toolCallId 已用于不同的图片请求，不能重复提交。"
+          );
+        }
+        const batch = await this.#readBatch(workspace, existing.batchId).catch(() => {
+          throw invalidInput(
+            "ecommerce_image_idempotency_record_invalid",
+            "幂等记录指向的图片任务不存在，不能自动重复生图。"
+          );
+        });
+        return { workspace, batch, reused: true };
+      }
+
+      // 如果进程在 batch 落盘后、幂等映射落盘前崩溃，可从 manifest 自愈，
+      // 避免恢复后的同一工具调用再次产生计费请求。
+      const recoveredBatch = await this.#findBatchByIdempotency(workspace, idempotencyKey);
+      if (recoveredBatch) {
+        if (
+          recoveredBatch.requestHash !== requestHash
+          || recoveredBatch.idempotencyType !== type
+        ) {
+          throw invalidInput(
+            "ecommerce_image_idempotency_conflict",
+            "同一 toolCallId 已用于不同的图片请求，不能重复提交。"
+          );
+        }
+        await atomicWriteJson(mappingPath, createIdempotencyRecord({
+          idempotencyKey,
+          requestHash,
+          type,
+          batchId: recoveredBatch.batchId
+        }));
+        return { workspace, batch: recoveredBatch, reused: true };
+      }
+
+      const batch = await createBatch({ idempotencyKey, idempotencyType: type, requestHash });
+      await this.#writeBatch(workspace, batch);
+      await atomicWriteJson(mappingPath, createIdempotencyRecord({
+        idempotencyKey,
+        requestHash,
+        type,
+        batchId: batch.batchId
+      }));
+      this.#enqueueBatch(workspace, batch.batchId, batch.items.map((item) => item.itemId));
+      return { workspace, batch, reused: false };
+    });
+  }
+
+  async #findBatchByIdempotency(workspace, idempotencyKey) {
+    const entries = await fs.readdir(workspacePaths(workspace).batches, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const batch = await readJson(
+        path.join(workspacePaths(workspace).batches, entry.name, "manifest.json")
+      ).catch(() => undefined);
+      if (batch?.idempotencyKey === idempotencyKey) return batch;
+    }
+    return undefined;
+  }
+
+  async #cancelBatchState(workspace, batchId) {
     const runningItems = [];
     const cancelledItems = [];
     await this.#withBatchLock(workspace, batchId, async () => {
       const batch = await this.#readBatch(workspace, batchId);
       for (const item of batch.items) {
-        if (item.status === "queued") {
+        if (["queued", "running"].includes(item.status)) {
+          if (item.status === "running") runningItems.push(item.itemId);
           item.status = "cancelled";
           item.error = {
             code: "ecommerce_image_cancelled",
@@ -409,8 +603,6 @@ export class EcommerceImageRuntime {
           item.finishedAt = nowIso();
           item.updatedAt = nowIso();
           cancelledItems.push(item);
-        } else if (item.status === "running") {
-          runningItems.push(item.itemId);
         }
       }
       batch.status = deriveBatchStatus(batch.items);
@@ -425,10 +617,43 @@ export class EcommerceImageRuntime {
         "批次已取消。上游是同步生图接口，已发出的请求仍可能继续生成并计费。"
       );
     }
-    return batchStatusResult(call, await this.#readBatch(workspace, batchId));
+    await this.#waitForBatchWorkers(workspace, batchId);
+    return await this.#waitForBatchTerminal(workspace, batchId, 1_000);
   }
 
-  async #retryBatch(call, workspace, batchId) {
+  async #interruptBatchState(workspace, batchId) {
+    const interruptedItems = [];
+    await this.#withBatchLock(workspace, batchId, async () => {
+      const batch = await this.#readBatch(workspace, batchId);
+      for (const item of batch.items) {
+        if (!["queued", "running"].includes(item.status)) continue;
+        item.status = "interrupted";
+        item.error = {
+          code: "ecommerce_image_interrupted",
+          message: "图片任务随当前 Agent 调用中断，未产生可确认的最终结果。",
+          retryable: true
+        };
+        item.finishedAt = nowIso();
+        item.updatedAt = nowIso();
+        interruptedItems.push(item);
+      }
+      batch.status = deriveBatchStatus(batch.items);
+      batch.updatedAt = nowIso();
+      await this.#writeBatch(workspace, batch, { notify: false });
+    });
+    for (const item of interruptedItems) {
+      await this.#updateAssetVersion(workspace, item);
+      const key = itemKey(workspace, batchId, item.itemId);
+      this.interruptedItems.add(key);
+      this.controllers.get(key)?.abort("图片任务随当前 Agent 调用中断。");
+    }
+    this.queue = this.queue.filter((entry) => !(entry.workspace === workspace && entry.batchId === batchId));
+    this.#notifyBatch(workspace, batchId);
+    await this.#waitForBatchWorkers(workspace, batchId);
+    return await this.#readBatch(workspace, batchId);
+  }
+
+  async #retryBatchState(call, workspace, batchId) {
     const original = await this.#readBatch(workspace, batchId);
     const retryable = original.items.filter((item) => ["failed", "interrupted"].includes(item.status));
     if (!retryable.length) {
@@ -436,8 +661,9 @@ export class EcommerceImageRuntime {
     }
     if (original.type === "generate") {
       const first = retryable[0];
-      return await this.generate({
+      return await this.#submitGenerate({
         ...call,
+        idempotencyOperation: `retry:${batchId}:generate`,
         arguments: {
           modelId: original.modelId,
           prompt: first.prompt,
@@ -449,8 +675,9 @@ export class EcommerceImageRuntime {
         }
       });
     }
-    return await this.edit({
+    return await this.#submitEdit({
       ...call,
+      idempotencyOperation: `retry:${batchId}:edit`,
       arguments: {
         modelId: original.modelId,
         edits: retryable.map((item) => ({
@@ -466,7 +693,21 @@ export class EcommerceImageRuntime {
     });
   }
 
-  async #waitForBatch(workspace, batchId, waitMs, signal) {
+  async #waitForBatchTerminal(workspace, batchId, waitMs, signal) {
+    const deadline = Date.now() + Math.max(0, waitMs);
+    while (true) {
+      const batch = await this.#readBatch(workspace, batchId);
+      if (TERMINAL_BATCH_STATUSES.has(batch.status) || Date.now() >= deadline) return batch;
+      await this.#waitForBatchChange(
+        workspace,
+        batchId,
+        Math.min(1_000, Math.max(1, deadline - Date.now())),
+        signal
+      );
+    }
+  }
+
+  async #waitForBatchChange(workspace, batchId, waitMs, signal) {
     const key = batchKey(workspace, batchId);
     await new Promise((resolve, reject) => {
       const waiter = { resolve, timer: undefined };
@@ -493,6 +734,14 @@ export class EcommerceImageRuntime {
         else signal.addEventListener("abort", onAbort, { once: true });
       }
     });
+  }
+
+  async #waitForBatchWorkers(workspace, batchId) {
+    const prefix = `${batchKey(workspace, batchId)}\0`;
+    const workers = [...this.workerPromises.entries()]
+      .filter(([key]) => key.startsWith(prefix))
+      .map(([, promise]) => promise);
+    if (workers.length) await Promise.allSettled(workers);
   }
 
   #notifyBatch(workspace, batchId) {
@@ -578,6 +827,23 @@ export class EcommerceImageRuntime {
       if (this.batchLocks.get(key) === chained) this.batchLocks.delete(key);
     }
   }
+
+  async #withIdempotencyLock(key, operation) {
+    const previous = this.idempotencyLocks.get(key) ?? Promise.resolve();
+    let release;
+    const current = new Promise((resolve) => {
+      release = resolve;
+    });
+    const chained = previous.then(() => current);
+    this.idempotencyLocks.set(key, chained);
+    await previous;
+    try {
+      return await operation();
+    } finally {
+      release();
+      if (this.idempotencyLocks.get(key) === chained) this.idempotencyLocks.delete(key);
+    }
+  }
 }
 
 async function normalizeGenerateInput(value, workspace) {
@@ -627,7 +893,7 @@ async function normalizeEditInput(value, workspace) {
 function normalizeBatchInput(value) {
   assertRecord(value, "ecommerce_image_batch 参数必须是对象。");
   assertAllowedKeys(value, ["action", "batchId", "waitMs"]);
-  const action = String(value.action ?? "").trim();
+  const action = String(value.action ?? "status").trim();
   if (!["status", "cancel", "retry"].includes(action)) {
     throw invalidInput("ecommerce_image_invalid_batch_action", "action 必须是 status、cancel 或 retry。");
   }
@@ -638,6 +904,19 @@ function normalizeBatchInput(value) {
     action,
     batchId: normalizeId(value.batchId, "batch", "batchId"),
     waitMs
+  };
+}
+
+function normalizeJobInput(value, options = {}) {
+  assertRecord(value, "电商图片任务参数必须是对象。");
+  assertAllowedKeys(value, options.wait ? ["operationId", "waitMs"] : ["operationId"]);
+  return {
+    operationId: normalizeId(value.operationId, "batch", "operationId"),
+    ...(options.wait ? {
+      waitMs: value.waitMs === undefined
+        ? MAX_WAIT_MS
+        : normalizeInteger(value.waitMs, "waitMs", 0, MAX_WAIT_MS)
+    } : {})
   };
 }
 
@@ -851,6 +1130,7 @@ function createAssetManifest({ assetId, batchId, item }) {
 function createAssetVersion({ batchId, item }) {
   return {
     versionId: item.versionId,
+    versionScope: "asset",
     parentVersionId: item.parentVersionId,
     batchId,
     status: item.status,
@@ -875,6 +1155,7 @@ function createAssetVersion({ batchId, item }) {
 
 function queuedResult(call, batch) {
   return completedResult(call, {
+    operationId: batch.batchId,
     batchId: batch.batchId,
     status: batch.status,
     imageCount: batch.items.length
@@ -883,6 +1164,47 @@ function queuedResult(call, batch) {
 
 function batchStatusResult(call, batch) {
   return completedResult(call, publicBatch(batch), createBatchArtifacts(batch));
+}
+
+function operationResult(call, batch, options = {}) {
+  const operationStatus = batch.status;
+  const terminal = TERMINAL_BATCH_STATUSES.has(operationStatus);
+  // 批次仍在运行时不把局部完成项作为交付物暴露，避免模型把“部分有文件”
+  // 误解为整个用户任务已经结束；终态 partial 才交付已验证的成功项。
+  const artifacts = terminal ? createBatchArtifacts(batch) : [];
+  const completed = operationStatus === "completed";
+  const partial = operationStatus === "partial";
+  const deliveryReady = (completed || partial) && artifacts.length > 0;
+  const details = {
+    ...publicBatch(batch),
+    operationId: batch.batchId,
+    operationStatus,
+    terminal,
+    completed,
+    allSucceeded: completed,
+    deliveryReady,
+    artifacts,
+    message: operationMessage(operationStatus, artifacts.length)
+  };
+
+  if (options.action === "cancel") {
+    return completedResult(call, {
+      ...details,
+      message: operationStatus === "cancelled"
+        ? "图片任务已取消；已经完成的图片被保留。"
+        : "取消请求已处理，请以 operationStatus 和 artifacts 为准。"
+    }, artifacts);
+  }
+  if (options.forceInterrupted || operationStatus === "interrupted" || operationStatus === "cancelled") {
+    return interruptedResult(details, artifacts);
+  }
+  if (operationStatus === "failed") {
+    return failedOperationResult(details, artifacts);
+  }
+  if (partial) {
+    return failedOperationResult(details, artifacts);
+  }
+  return completedResult(call, details, artifacts);
 }
 
 function completedResult(call, details, artifacts = []) {
@@ -894,8 +1216,54 @@ function completedResult(call, details, artifacts = []) {
   };
 }
 
+function failedOperationResult(details, artifacts) {
+  const firstError = details.items.find((item) => item.error)?.error;
+  const error = firstError ?? {
+    code: "ecommerce_image_failed",
+    message: "图片任务失败，未产生可交付图片。",
+    retryable: false
+  };
+  return {
+    status: "failed",
+    content: JSON.stringify(details, null, 2),
+    details,
+    artifacts,
+    error
+  };
+}
+
+function interruptedResult(details, artifacts) {
+  const firstError = details.items.find((item) => item.error)?.error;
+  const error = firstError ?? {
+    code: "ecommerce_image_interrupted",
+    message: "图片任务已中断，不能作为完成依据。",
+    retryable: true
+  };
+  return {
+    status: "interrupted",
+    content: JSON.stringify(details, null, 2),
+    details,
+    artifacts,
+    error
+  };
+}
+
+function operationMessage(status, artifactCount) {
+  if (status === "completed") return `图片任务已完成并验证 ${artifactCount} 个可交付产物。`;
+  if (status === "partial") return `图片任务未全部成功；只能交付已验证的 ${artifactCount} 个产物，并且必须向用户说明其余项目失败。`;
+  if (status === "failed") return "图片任务失败，没有可交付产物。";
+  if (status === "cancelled") return "图片任务已取消，不能将未完成项目描述为已完成。";
+  if (status === "interrupted") return "图片任务已中断，不能将未完成项目描述为已完成。";
+  return "图片任务仍在运行；该状态只供 SDK 或诊断接口查询，模型调用不会收到此中间状态。";
+}
+
+function calculateBatchWaitMs(imageCount, imageTimeoutMs, settleMs) {
+  return Math.ceil(imageCount / CONCURRENCY) * imageTimeoutMs + settleMs;
+}
+
 function publicBatch(batch) {
   return {
+    operationId: batch.batchId,
     batchId: batch.batchId,
     type: batch.type,
     modelId: batch.modelId,
@@ -919,6 +1287,7 @@ function publicBatch(batch) {
       outputIndex: item.outputIndex,
       assetId: item.assetId,
       versionId: item.versionId,
+      versionScope: "asset",
       parentVersionId: item.parentVersionId,
       path: item.path,
       mimeType: item.mimeType,
@@ -959,6 +1328,7 @@ function createArtifact(item, batchId) {
       batchId,
       assetId: item.assetId,
       versionId: item.versionId,
+      versionScope: "asset",
       parentVersionId: item.parentVersionId,
       outputIndex: item.outputIndex,
       path: item.path,
@@ -997,7 +1367,7 @@ async function retryTransient(operation, signal) {
 
 async function withTimeout(operation, timeoutMs, parentSignal) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(`单张图片生成超过 ${timeoutMs}ms。`), timeoutMs);
+  const timer = setTimeout(() => controller.abort(`单个图片任务超过 ${timeoutMs}ms。`), timeoutMs);
   const abort = () => controller.abort(parentSignal.reason);
   if (parentSignal?.aborted) abort();
   else parentSignal?.addEventListener("abort", abort, { once: true });
@@ -1006,7 +1376,7 @@ async function withTimeout(operation, timeoutMs, parentSignal) {
   } catch (error) {
     if (controller.signal.aborted && !parentSignal?.aborted) {
       const timeoutError = new Error(
-        `单张图片生成超过 ${timeoutMs}ms。上游结果未知，不能自动重试。`
+        `单个图片任务超过 ${timeoutMs}ms。上游结果未知，不能自动重试。`
       );
       timeoutError.code = "ecommerce_image_timeout";
       timeoutError.retryable = false;
@@ -1057,13 +1427,41 @@ async function readJson(filePath) {
   return JSON.parse(await fs.readFile(filePath, "utf8"));
 }
 
+async function readOptionalJson(filePath) {
+  try {
+    return await readJson(filePath);
+  } catch (error) {
+    if (error?.code === "ENOENT") return undefined;
+    throw invalidInput(
+      "ecommerce_image_idempotency_record_invalid",
+      `无法读取图片幂等记录：${formatError(error)}`
+    );
+  }
+}
+
 function workspacePaths(workspace) {
   const root = path.join(workspace, "outputs", "ecommerce-images");
   return {
     root,
     sources: path.join(root, "sources"),
     batches: path.join(root, "batches"),
-    assets: path.join(root, "assets")
+    assets: path.join(root, "assets"),
+    idempotency: path.join(root, "idempotency")
+  };
+}
+
+function idempotencyMappingPath(workspace, idempotencyKey) {
+  return path.join(workspacePaths(workspace).idempotency, `${sha256(idempotencyKey)}.json`);
+}
+
+function createIdempotencyRecord({ idempotencyKey, requestHash, type, batchId }) {
+  return {
+    schemaVersion: "agent-ecommerce-image.idempotency.v1",
+    idempotencyKey,
+    requestHash,
+    type,
+    batchId,
+    createdAt: nowIso()
   };
 }
 
@@ -1083,6 +1481,36 @@ function detectInputMime(bytes) {
   if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "image/jpeg";
   if (bytes.length >= 12 && bytes.subarray(0, 4).toString("ascii") === "RIFF" && bytes.subarray(8, 12).toString("ascii") === "WEBP") return "image/webp";
   throw invalidInput("ecommerce_image_invalid_image_type", "无法识别图片内容，仅支持 PNG、JPEG 和 WebP。");
+}
+
+async function verifyStoredOutput(filePath, expectedMimeType, expectedBytes) {
+  const stat = await fs.stat(filePath).catch((error) => {
+    throw invalidInput(
+      "ecommerce_image_output_verification_failed",
+      `图片写入后无法读取：${formatError(error)}`
+    );
+  });
+  if (!stat.isFile() || stat.size <= 0) {
+    throw invalidInput("ecommerce_image_output_verification_failed", "图片写入后不是有效的非空文件。");
+  }
+  const persistedBytes = await fs.readFile(filePath);
+  const mimeType = detectInputMime(persistedBytes);
+  const contentHash = sha256(persistedBytes);
+  if (
+    mimeType !== expectedMimeType
+    || persistedBytes.byteLength !== expectedBytes.byteLength
+    || contentHash !== sha256(expectedBytes)
+  ) {
+    throw invalidInput(
+      "ecommerce_image_output_verification_failed",
+      "图片写入后的 MIME、大小或内容哈希与 Gateway 返回结果不一致。"
+    );
+  }
+  return {
+    mimeType,
+    bytes: persistedBytes.byteLength,
+    contentHash
+  };
 }
 
 function assertPathInside(workspace, filePath) {
@@ -1136,6 +1564,14 @@ function normalizeVersionId(value) {
   const versionId = typeof value === "string" ? value.trim() : "";
   if (!/^v[1-9]\d*$/.test(versionId)) throw invalidInput("ecommerce_image_invalid_version", "versionId 必须是 v1、v2 等版本号。");
   return versionId;
+}
+
+function normalizeIdempotencyKey(value) {
+  const key = typeof value === "string" ? value.trim() : "";
+  if (!key || key.length > 512 || key.includes("\0")) {
+    throw invalidInput("ecommerce_image_invalid_tool_call_id", "生图工具需要有效的 toolCallId 作为幂等键。");
+  }
+  return key;
 }
 
 function normalizeInteger(value, field, minimum, maximum) {

@@ -16,7 +16,7 @@ import { fileURLToPath } from "node:url";
 
 const BRICK_ID = "agent-tool";
 const BRICK_NAME = "Agent Tool";
-const BRICK_VERSION = "0.7.1";
+const BRICK_VERSION = "0.8.0";
 const BRICK_KIND = "tool";
 
 const toolServiceCapability = createBrickCapability({
@@ -92,7 +92,7 @@ const ecommerceImageCapability = createBrickCapability({
   id: "agent-tool.ecommerce-image",
   name: "Ecommerce Image Tools",
   type: "tool",
-  description: "异步生成和编辑 GPT Image 2 电商图片，并在 workspace 中管理批次、独立资产与不可覆盖版本。",
+  description: "生成和编辑 GPT Image 2 电商图片，封装任务等待、状态管理、产物验证和不可覆盖版本。",
   requires: ["node-runtime", "server-tool-gateway"],
   optional: true
 });

@@ -1,16 +1,24 @@
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
 import { AgentTool } from "../index.mjs";
+import { createEcommerceImageRuntime } from "../main/ecommerce-image-runtime.mjs";
 
-const TOOL_NAMES = [
+const MODEL_TOOL_NAMES = [
   "ecommerce_image_generate",
   "ecommerce_image_edit",
-  "ecommerce_image_batch",
   "ecommerce_image_list"
 ];
+const COMPATIBILITY_TOOL_NAMES = [
+  "ecommerce_image_job_status",
+  "ecommerce_image_job_cancel",
+  "ecommerce_image_job_retry",
+  "ecommerce_image_batch"
+];
+const SELECTED_TOOL_NAMES = [...MODEL_TOOL_NAMES, ...COMPATIBILITY_TOOL_NAMES];
 const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "agent-tool-ecommerce-"));
 const outsideDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "agent-tool-ecommerce-outside-"));
 const outsideImage = path.join(outsideDirectory, "outside.png");
@@ -21,6 +29,7 @@ let activeRequests = 0;
 let maxActiveRequests = 0;
 let transientFailures = 0;
 let networkFailures = 0;
+let partialFailures = 0;
 let rejectEnabled = true;
 const providerRequests = [];
 
@@ -55,6 +64,22 @@ globalThis.fetch = async (url, init) => {
       networkFailures += 1;
       throw new TypeError("socket closed after request upload");
     }
+    if (request.prompt.includes("PARTIAL") && partialFailures < 1) {
+      partialFailures += 1;
+      return jsonResponse({
+        ok: false,
+        error: { code: "ecommerce_image_moderation_blocked", message: "partial blocked", retryable: false }
+      }, 400);
+    }
+    if (request.prompt.includes("INVALID_OUTPUT")) {
+      return jsonResponse({
+        ok: true,
+        modelId: "gpt-image-2",
+        imageBase64: png.toString("base64"),
+        mimeType: "image/jpeg",
+        providerRequestId: "provider-invalid-output"
+      });
+    }
     return jsonResponse({
       ok: true,
       modelId: "gpt-image-2",
@@ -68,6 +93,7 @@ globalThis.fetch = async (url, init) => {
 };
 
 let hiddenTool;
+let newOnlyTool;
 let tool;
 let toolServer;
 try {
@@ -77,12 +103,30 @@ try {
 
   hiddenTool = new AgentTool({ workspace });
   const hiddenNames = hiddenTool.definitions.map((definition) => definition.function.name);
-  assert.equal(hiddenNames.some((name) => TOOL_NAMES.includes(name)), false);
+  assert.equal(hiddenNames.some((name) => SELECTED_TOOL_NAMES.includes(name)), false);
   await hiddenTool.dispose();
   hiddenTool = undefined;
 
-  tool = new AgentTool({ workspace, tools: TOOL_NAMES });
-  assert.deepEqual(tool.definitions.map((definition) => definition.function.name).sort(), [...TOOL_NAMES].sort());
+  newOnlyTool = new AgentTool({ workspace, tools: MODEL_TOOL_NAMES });
+  assert.deepEqual(
+    newOnlyTool.definitions.map((definition) => definition.function.name).sort(),
+    [...MODEL_TOOL_NAMES].sort()
+  );
+  await newOnlyTool.dispose();
+  newOnlyTool = undefined;
+
+  tool = new AgentTool({ workspace, tools: SELECTED_TOOL_NAMES });
+  assert.deepEqual(
+    tool.definitions.map((definition) => definition.function.name).sort(),
+    [...MODEL_TOOL_NAMES].sort()
+  );
+  const schemas = new Map(tool.definitions.map((definition) => [definition.function.name, definition.function]));
+  assert.match(schemas.get("ecommerce_image_generate").description, /deliveryReady=true/);
+  assert.match(schemas.get("ecommerce_image_generate").description, /不需要调用状态、取消或重试工具/);
+  assert.equal(schemas.has("ecommerce_image_job_status"), false);
+  assert.equal(schemas.has("ecommerce_image_job_cancel"), false);
+  assert.equal(schemas.has("ecommerce_image_job_retry"), false);
+  assert.equal(schemas.has("ecommerce_image_batch"), false);
 
   const generated = await tool.execute("ecommerce_image_generate", {
     prompt: "生成白底商品主图",
@@ -96,11 +140,16 @@ try {
     }]
   }, { workspace });
   assert.equal(generated.status, "completed");
-  assert.equal(generated.details.status, "queued");
+  assert.equal(generated.details.status, "completed");
+  assert.equal(generated.details.operationStatus, "completed");
+  assert.equal(generated.details.completed, true);
+  assert.equal(generated.details.allSucceeded, true);
+  assert.equal(generated.details.deliveryReady, true);
+  assert.equal(generated.details.terminal, true);
+  assert.equal(Object.hasOwn(generated.details, "nextAction"), false);
+  assert.equal(generated.details.operationId, generated.details.batchId);
   assert.equal(Object.hasOwn(generated.details, "jobCount"), false);
-  assert.equal(generated.details.imageCount, 4);
-
-  const completed = await waitForBatch(tool, generated.details.batchId);
+  const completed = generated;
   assert.equal(completed.details.status, "completed");
   assert.equal(completed.details.count, 4);
   assert.equal(completed.details.progress.completed, 4);
@@ -124,7 +173,12 @@ try {
     assert.equal(artifact.kind, "image");
     assert.equal(artifact.renderer, "ecommerce-image");
     assert.equal(artifact.data.versionId, "v1");
-    assert.equal(await pathExists(path.join(workspace, ...artifact.files[0].path.split("/"))), true);
+    assert.equal(artifact.data.versionScope, "asset");
+    const artifactPath = path.join(workspace, ...artifact.files[0].path.split("/"));
+    assert.equal(await pathExists(artifactPath), true);
+    const artifactBytes = await fs.readFile(artifactPath);
+    assert.equal(artifact.files[0].bytes, artifactBytes.byteLength);
+    assert.equal(artifact.data.contentHash, sha256(artifactBytes));
   }
   assert.equal(providerRequests.filter((request) => request.images === 1).length, 4);
   assert.equal(
@@ -134,27 +188,72 @@ try {
     true
   );
 
+  const requestsBeforeIdempotency = providerRequests.length;
+  const idempotentInput = {
+    prompt: "验证幂等提交",
+    size: { width: 1024, height: 1024 }
+  };
+  const [idempotentFirst, idempotentReplay] = await Promise.all([
+    tool.execute(
+      "ecommerce_image_generate",
+      idempotentInput,
+      { workspace, toolCallId: "call-idempotent-generate" }
+    ),
+    tool.execute(
+      "ecommerce_image_generate",
+      idempotentInput,
+      { workspace, toolCallId: "call-idempotent-generate" }
+    )
+  ]);
+  assert.equal(idempotentReplay.details.operationId, idempotentFirst.details.operationId);
+  assert.equal(providerRequests.length, requestsBeforeIdempotency + 1);
+  await fs.rm(path.join(
+    workspace,
+    "outputs",
+    "ecommerce-images",
+    "idempotency",
+    `${sha256("call-idempotent-generate")}.json`
+  ));
+  const recoveredIdempotency = await tool.execute(
+    "ecommerce_image_generate",
+    idempotentInput,
+    { workspace, toolCallId: "call-idempotent-generate" }
+  );
+  assert.equal(recoveredIdempotency.details.operationId, idempotentFirst.details.operationId);
+  assert.equal(providerRequests.length, requestsBeforeIdempotency + 1);
+  const idempotencyConflict = await tool.execute(
+    "ecommerce_image_generate",
+    { ...idempotentInput, prompt: "同一调用 ID 的不同请求" },
+    { workspace, toolCallId: "call-idempotent-generate" }
+  );
+  assert.equal(idempotencyConflict.status, "failed");
+  assert.equal(idempotencyConflict.error.code, "ecommerce_image_idempotency_conflict");
+
   toolServer = await tool.createServer({
     config: { ...tool.config, host: "127.0.0.1", port: 0 }
   });
   const serverAddress = await toolServer.listen();
   const manifestResponse = await originalFetch(`${serverAddress.url}/api/tools/manifest`);
   const manifest = await manifestResponse.json();
-  assert.deepEqual(manifest.tools.map((entry) => entry.name).sort(), [...TOOL_NAMES].sort());
+  assert.deepEqual(manifest.tools.map((entry) => entry.name).sort(), [...SELECTED_TOOL_NAMES].sort());
   const httpStatusResponse = await originalFetch(`${serverAddress.url}/api/tools/call`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
       schemaVersion: "agent-cli-tool.call.v1",
       toolCallId: "call-http-shared-batch",
-      toolName: "ecommerce_image_batch",
-      arguments: { action: "status", batchId: generated.details.batchId },
+      toolName: "ecommerce_image_job_status",
+      arguments: { operationId: generated.details.operationId, waitMs: 0 },
       workspace: { root: workspace }
     })
   });
   const httpStatus = await httpStatusResponse.json();
   assert.equal(httpStatus.details.batchId, generated.details.batchId);
   assert.equal(httpStatus.details.status, "completed");
+  const legacyStatus = await tool.execute("ecommerce_image_batch", {
+    batchId: generated.details.batchId
+  }, { workspace });
+  assert.equal(legacyStatus.details.status, "completed");
   await toolServer.close();
   toolServer = undefined;
 
@@ -173,7 +272,7 @@ try {
       }]
     }]
   }, { workspace });
-  const editCompleted = await waitForBatch(tool, edited.details.batchId);
+  const editCompleted = edited;
   assert.equal(editCompleted.details.status, "completed");
   assert.equal(editCompleted.details.items[0].assetId, first.assetId);
   assert.equal(editCompleted.details.items[0].versionId, "v2");
@@ -186,6 +285,7 @@ try {
   const history = await tool.execute("ecommerce_image_list", { assetId: first.assetId }, { workspace });
   assert.equal(history.status, "completed");
   assert.deepEqual(history.details.assets[0].versions.map((version) => version.versionId), ["v1", "v2"]);
+  assert.equal(history.details.assets[0].versions.every((version) => version.versionScope === "asset"), true);
   assert.equal(history.artifacts.length, 2);
 
   const concurrentEdits = await Promise.all([
@@ -206,7 +306,7 @@ try {
       }]
     }, { workspace })
   ]);
-  const concurrentCompleted = await Promise.all(concurrentEdits.map((entry) => waitForBatch(tool, entry.details.batchId)));
+  const concurrentCompleted = concurrentEdits;
   assert.deepEqual(
     concurrentCompleted.map((entry) => entry.details.items[0].versionId).sort(),
     ["v3", "v4"]
@@ -237,7 +337,7 @@ try {
     prompt: "TRANSIENT 后生成",
     size: { width: 1024, height: 1024 }
   }, { workspace });
-  const transientCompleted = await waitForBatch(tool, transient.details.batchId);
+  const transientCompleted = transient;
   assert.equal(transientCompleted.details.status, "completed");
   assert.equal(transientCompleted.details.items[0].attempts, 3);
   assert.equal(transientFailures, 2);
@@ -246,7 +346,8 @@ try {
     prompt: "REJECT",
     size: { width: 1024, height: 1024 }
   }, { workspace });
-  const rejectedCompleted = await waitForBatch(tool, rejected.details.batchId);
+  const rejectedCompleted = rejected;
+  assert.equal(rejectedCompleted.status, "failed");
   assert.equal(rejectedCompleted.details.status, "failed");
   assert.equal(rejectedCompleted.details.items[0].attempts, 1);
   assert.equal(rejectedCompleted.details.items[0].error.code, "ecommerce_image_moderation_blocked");
@@ -255,39 +356,207 @@ try {
     prompt: "NETWORK_UNKNOWN",
     size: { width: 1024, height: 1024 }
   }, { workspace });
-  const networkUnknownCompleted = await waitForBatch(tool, networkUnknown.details.batchId);
+  const networkUnknownCompleted = networkUnknown;
+  assert.equal(networkUnknownCompleted.status, "failed");
   assert.equal(networkUnknownCompleted.details.status, "failed");
   assert.equal(networkUnknownCompleted.details.items[0].attempts, 1);
   assert.equal(networkUnknownCompleted.details.items[0].error.retryable, false);
   assert.equal(networkFailures, 1);
 
+  const partial = await tool.execute("ecommerce_image_generate", {
+    prompt: "PARTIAL 生成两个候选",
+    size: { width: 1024, height: 1024 },
+    count: 2
+  }, { workspace });
+  assert.equal(partial.status, "failed");
+  assert.equal(partial.details.operationStatus, "partial");
+  assert.equal(partial.details.terminal, true);
+  assert.equal(partial.details.completed, false);
+  assert.equal(partial.details.allSucceeded, false);
+  assert.equal(partial.details.deliveryReady, true);
+  assert.equal(partial.artifacts.length, 1);
+  assert.equal(Object.hasOwn(partial.details, "nextAction"), false);
+  assert.match(partial.details.message, /未全部成功/);
+
+  const invalidOutput = await tool.execute("ecommerce_image_generate", {
+    prompt: "INVALID_OUTPUT",
+    size: { width: 1024, height: 1024 }
+  }, { workspace });
+  assert.equal(invalidOutput.status, "failed");
+  assert.equal(invalidOutput.details.deliveryReady, false);
+  assert.equal(invalidOutput.artifacts.length, 0);
+  assert.equal(invalidOutput.error.code, "ecommerce_image_invalid_gateway_response");
+
+  const legacyRejected = await tool.execute("ecommerce_image_generate", {
+    prompt: "REJECT legacy retry",
+    size: { width: 1024, height: 1024 }
+  }, { workspace });
+  assert.equal(legacyRejected.status, "failed");
+
   rejectEnabled = false;
-  const retried = await tool.execute("ecommerce_image_batch", {
-    action: "retry",
-    batchId: rejected.details.batchId
+  const retried = await tool.execute("ecommerce_image_job_retry", {
+    operationId: rejected.details.operationId
   }, { workspace });
   assert.notEqual(retried.details.batchId, rejected.details.batchId);
-  const retryCompleted = await waitForBatch(tool, retried.details.batchId);
+  const retryCompleted = retried;
   assert.equal(retryCompleted.details.status, "completed");
   assert.notEqual(retryCompleted.details.items[0].assetId, rejectedCompleted.details.items[0].assetId);
 
-  const slow = await tool.execute("ecommerce_image_generate", {
+  const legacyRetried = await tool.execute("ecommerce_image_batch", {
+    action: "retry",
+    batchId: legacyRejected.details.batchId
+  }, { workspace });
+  assert.equal(legacyRetried.details.status, "queued");
+  const legacyRetryCompleted = await tool.execute("ecommerce_image_job_status", {
+    operationId: legacyRetried.details.operationId,
+    waitMs: 1_000
+  }, { workspace });
+  assert.equal(legacyRetryCompleted.details.operationStatus, "completed");
+
+  // 使用真实运行时和可中断异步函数验证：多图任务经历中间状态时，
+  // generate 自身会持续阻塞到终态，不再把轮询责任交给模型。
+  const longPollRuntime = createEcommerceImageRuntime(tool.config, {
+    imageTimeoutMs: 500,
+    batchSettleMs: 20,
+    fetchImage: async (_config, _endpoint, _input, signal) => {
+      await delay(150, signal);
+      return {
+        imageBase64: png.toString("base64"),
+        mimeType: "image/png",
+        providerRequestId: "provider-long-poll"
+      };
+    }
+  });
+  const longPollStartedAt = Date.now();
+  const longPolled = await longPollRuntime.generate(runtimeCall({
+    toolCallId: "call-long-poll-submit",
+    workspace,
+    arguments: {
+      prompt: "验证真实长轮询",
+      size: { width: 1024, height: 1024 },
+      count: 2
+    }
+  }));
+  assert.equal(longPolled.details.operationStatus, "completed");
+  assert.equal(longPolled.details.deliveryReady, true);
+  assert.equal(Object.hasOwn(longPolled.details, "nextAction"), false);
+  assert.ok(Date.now() - longPollStartedAt >= 120, "generate 不能在 queued -> running 时提前返回");
+  await longPollRuntime.dispose();
+
+  // 批次总预算包含排队时间。即使前一个批次占满并发槽，后续批次到期后
+  // 也必须收敛并取消本地任务，不能在模型收到结果后继续后台生图。
+  const batchTimeoutRuntime = createEcommerceImageRuntime(tool.config, {
+    imageTimeoutMs: 200,
+    batchSettleMs: 20,
+    fetchImage: async (_config, _endpoint, _input, signal) => {
+      await delay(150, signal);
+      return {
+        imageBase64: png.toString("base64"),
+        mimeType: "image/png",
+        providerRequestId: "provider-batch-timeout"
+      };
+    }
+  });
+  const blockerPromise = batchTimeoutRuntime.generate(runtimeCall({
+    toolCallId: "call-batch-timeout-blocker",
+    workspace,
+    arguments: {
+      prompt: "占用并发槽",
+      size: { width: 1024, height: 1024 },
+      count: 2
+    }
+  }));
+  await delay(20);
+  const timedOutBatch = await batchTimeoutRuntime.generate(runtimeCall({
+    toolCallId: "call-batch-timeout-target",
+    workspace,
+    arguments: {
+      prompt: "验证批次总预算",
+      size: { width: 1024, height: 1024 }
+    }
+  }));
+  assert.equal(timedOutBatch.status, "interrupted");
+  assert.equal(timedOutBatch.details.operationStatus, "interrupted");
+  assert.equal(timedOutBatch.details.allSucceeded, false);
+  assert.equal(timedOutBatch.details.deliveryReady, false);
+  assert.equal(timedOutBatch.details.items[0].error.code, "ecommerce_image_batch_timeout");
+  assert.equal(timedOutBatch.details.items[0].error.retryable, false);
+  assert.equal(Object.hasOwn(timedOutBatch.details, "nextAction"), false);
+  assert.equal(
+    [...batchTimeoutRuntime.workerPromises.keys()].some((key) => key.includes(timedOutBatch.details.batchId)),
+    false,
+    "批次超时结果返回前必须结束对应本地 worker"
+  );
+  assert.equal((await blockerPromise).details.operationStatus, "completed");
+  await batchTimeoutRuntime.dispose();
+
+  // 状态工具不向模型暴露，但 SDK/HTTP 调用仍可在另一个控制流中取消任务。
+  const slowPromise = tool.execute("ecommerce_image_generate", {
     prompt: "SLOW",
     size: { width: 1024, height: 1024 },
     count: 3
-  }, { workspace });
-  await delay(50);
-  await tool.execute("ecommerce_image_batch", {
-    action: "cancel",
-    batchId: slow.details.batchId
-  }, { workspace });
-  const cancelled = await waitForBatch(tool, slow.details.batchId);
+  }, { workspace, toolCallId: "call-cancel-submit" });
+  const slowBatchId = await waitForBatchByPrompt(workspace, "SLOW");
+  const cancelled = await tool.execute("ecommerce_image_job_cancel", {
+    operationId: slowBatchId
+  }, { workspace, toolCallId: "call-cancel-action" });
   assert.equal(cancelled.details.status, "cancelled");
   assert.equal(cancelled.details.progress.cancelled, 3);
   assert.equal(
     cancelled.details.items.every((item) => item.error.message.includes("仍可能继续生成并计费")),
     true
   );
+  const slowResult = await slowPromise;
+  assert.equal(slowResult.status, "interrupted");
+  assert.equal(slowResult.details.operationStatus, "cancelled");
+  assert.equal(
+    [...tool.ecommerceImageRuntime.workerPromises.keys()].some((key) => key.includes(slowBatchId)),
+    false,
+    "取消结果返回前必须结束对应本地 worker"
+  );
+
+  const legacySlowPromise = tool.execute("ecommerce_image_generate", {
+    prompt: "SLOW legacy cancel",
+    size: { width: 1024, height: 1024 },
+    count: 2
+  }, { workspace, toolCallId: "call-legacy-cancel-submit" });
+  const legacySlowBatchId = await waitForBatchByPrompt(workspace, "SLOW legacy cancel");
+  const legacyCancelled = await tool.execute("ecommerce_image_batch", {
+    action: "cancel",
+    batchId: legacySlowBatchId
+  }, { workspace, toolCallId: "call-legacy-cancel-action" });
+  assert.equal(legacyCancelled.details.status, "cancelled");
+  const legacySlowResult = await legacySlowPromise;
+  assert.equal(legacySlowResult.status, "interrupted");
+
+  const interruptRuntime = createEcommerceImageRuntime(tool.config, {
+    imageTimeoutMs: 5_000,
+    batchSettleMs: 20,
+    fetchImage: async (_config, _endpoint, _input, signal) => {
+      await delay(2_000, signal);
+      return {
+        imageBase64: png.toString("base64"),
+        mimeType: "image/png",
+        providerRequestId: "provider-interrupt"
+      };
+    }
+  });
+  const interruptController = new AbortController();
+  const interruptedPromise = interruptRuntime.generate(runtimeCall({
+    toolCallId: "call-interrupt-submit",
+    workspace,
+    signal: interruptController.signal,
+    arguments: {
+      prompt: "验证中断",
+      size: { width: 1024, height: 1024 }
+    }
+  }));
+  setTimeout(() => interruptController.abort("测试中断"), 30);
+  const interruptedResult = await interruptedPromise;
+  assert.equal(interruptedResult.status, "interrupted");
+  assert.equal(interruptedResult.details.operationStatus, "interrupted");
+  assert.equal(interruptedResult.details.deliveryReady, false);
+  await interruptRuntime.dispose();
 
   const oversized = await tool.execute("ecommerce_image_generate", {
     prompt: "数量越界",
@@ -346,10 +615,10 @@ try {
   interruptedAsset.versions[0].status = "running";
   await fs.writeFile(interruptedAssetPath, `${JSON.stringify(interruptedAsset, null, 2)}\n`);
 
-  tool = new AgentTool({ workspace, tools: TOOL_NAMES });
-  const recovered = await tool.execute("ecommerce_image_batch", {
-    action: "status",
-    batchId: transient.details.batchId
+  tool = new AgentTool({ workspace, tools: SELECTED_TOOL_NAMES });
+  const recovered = await tool.execute("ecommerce_image_job_status", {
+    operationId: transient.details.operationId,
+    waitMs: 0
   }, { workspace });
   assert.equal(recovered.details.status, "interrupted");
   const recoveredAsset = await tool.execute("ecommerce_image_list", {
@@ -368,6 +637,7 @@ try {
   if (tool) await tool.dispose();
   if (toolServer) await toolServer.close();
   if (hiddenTool) await hiddenTool.dispose();
+  if (newOnlyTool) await newOnlyTool.dispose();
   globalThis.fetch = originalFetch;
   if (originalGateway === undefined) delete process.env.AGENT_TOOL_GATEWAY_BASE_URL;
   else process.env.AGENT_TOOL_GATEWAY_BASE_URL = originalGateway;
@@ -375,17 +645,13 @@ try {
   await fs.rm(outsideDirectory, { recursive: true, force: true });
 }
 
-async function waitForBatch(agentTool, batchId) {
-  const deadline = Date.now() + 10_000;
-  while (Date.now() < deadline) {
-    const result = await agentTool.execute("ecommerce_image_batch", {
-      action: "status",
-      batchId,
-      waitMs: 1_000
-    }, { workspace });
-    if (["partial", "completed", "failed", "cancelled", "interrupted"].includes(result.details.status)) return result;
-  }
-  throw new Error(`Timed out waiting for ${batchId}`);
+function runtimeCall({ toolCallId, workspace: callWorkspace, arguments: args, signal }) {
+  return {
+    toolCallId,
+    arguments: args,
+    workspace: { root: callWorkspace },
+    signal
+  };
 }
 
 function jsonResponse(value, status = 200) {
@@ -409,6 +675,28 @@ function delay(ms, signal) {
   });
 }
 
+async function waitForBatchByPrompt(workspaceRoot, prompt, timeoutMs = 2_000) {
+  const deadline = Date.now() + timeoutMs;
+  const batchesDirectory = path.join(workspaceRoot, "outputs", "ecommerce-images", "batches");
+  while (Date.now() < deadline) {
+    const entries = await fs.readdir(batchesDirectory, { withFileTypes: true }).catch(() => []);
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const manifest = await fs.readFile(
+        path.join(batchesDirectory, entry.name, "manifest.json"),
+        "utf8"
+      ).then((content) => JSON.parse(content), () => undefined);
+      if (manifest?.items?.some((item) => item.prompt === prompt)) return manifest.batchId;
+    }
+    await delay(10);
+  }
+  throw new Error(`等待图片批次落盘超时：${prompt}`);
+}
+
 async function pathExists(filePath) {
   return await fs.access(filePath).then(() => true, () => false);
+}
+
+function sha256(value) {
+  return crypto.createHash("sha256").update(value).digest("hex");
 }

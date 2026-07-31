@@ -81,6 +81,7 @@ jobs:
           node --check src/scripts/smoke-agent-cli-gateway-kimi-image-present.mjs
           node --check src/scripts/smoke-agent-cli-gateway-kimi-skill.mjs
           node --check src/scripts/smoke-agent-cli-gateway-kimi-skill-resource.mjs
+          node --check src/scripts/smoke-agent-cli-gateway-deepseek-ecommerce-image.mjs
           node --check src/scripts/smoke-server.mjs
           node --check src/scripts/smoke-tools.mjs
           node --check src/scripts/smoke-visualizations.mjs

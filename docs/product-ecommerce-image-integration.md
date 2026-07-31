@@ -2,21 +2,20 @@
 
 ## 版本
 
-- `@xuanzhen-tech/agent-tool-brick@0.7.1`
-- `@xuanzhen-tech/agent-skill-brick@0.5.0`
+- `@xuanzhen-tech/agent-tool-brick@0.8.0`
+- `@xuanzhen-tech/agent-skill-brick@0.8.1`
 - `agent-llm-gateway@0.3.0`，由服务端部署，不是 Product npm 依赖
 
 ## Product 需要做的事
 
 Product 只负责选择能力并组装现有对象，不复制生图 runtime，也不保存图片 provider key。
 
-创建 `AgentTool` 时，把以下四个默认隐藏工具加入 Product 的工具白名单：
+创建 `AgentTool` 时，把以下默认隐藏工具加入 Product 的工具白名单：
 
 ```js
 const ecommerceImageTools = [
   "ecommerce_image_generate",
   "ecommerce_image_edit",
-  "ecommerce_image_batch",
   "ecommerce_image_list"
 ];
 
@@ -36,7 +35,7 @@ const agentSkill = new AgentSkill({
 });
 ```
 
-`amazon-product-image-generation` 会教 Agent 填写四个工具的参数、编写亚马逊商品生图提示词、轮询异步批次和继续编辑历史版本。Product 不需要解析 Skill reference。
+`amazon-product-image-generation` 会教 Agent 编写电商图片提示词和继续编辑历史版本。新版 Skill 不再要求 Agent 保存 batchId、轮询、取消或重试；这些状态由 AgentTool 内部管理。Product 不需要解析 Skill reference，也不需要把兼容状态工具加入模型白名单。
 
 ## Gateway
 
@@ -50,13 +49,21 @@ API易 key、base URL、模型和 provider 超时只由 Gateway 服务端配置�
 
 ## GUI 与状态
 
-`ecommerce_image_generate` 和 `ecommerce_image_edit` 只提交异步批次，返回 `batchId` 与 `queued` 状态。GUI 不应把提交成功显示成图片已完成。
+`ecommerce_image_generate` 和 `ecommerce_image_edit` 会创建本地任务并等待：
 
-Agent 会通过 `ecommerce_image_batch` 查询：
+- 单个图片任务的总预算为 390 秒，包含内部安全重试。
+- 多图批次按图片数量和并发数计算预算，最多 9 张时约 33 分钟。
+- 工具只向模型返回 completed、failed 或 interrupted 最终结果。
+- `deliveryReady=true` 且存在 artifact 才表示图片可交付。
+- 部分成功返回顶层 failed、`operationStatus=partial`，并保留已经验证的 artifacts。
+
+任务状态为：
 
 ```text
 queued | running | partial | completed | failed | cancelled | interrupted
 ```
+
+`operationId` 与兼容字段 `batchId` 仍用于日志和排障。Product 如需后台诊断，可以直接通过 SDK/HTTP 调用 `ecommerce_image_job_status/cancel/retry`；这些接口不进入模型 definitions。用户在对话中取消任务时，应中断 AgentCli 当前调用，由 `AbortSignal` 贯穿到 AgentTool，不让模型决定取消。
 
 完成图片使用 `agent-output.v1`：
 
@@ -66,24 +73,27 @@ renderer=ecommerce-image
 data.batchId
 data.assetId
 data.versionId
+data.versionScope=asset
 files[].path
 ```
 
-GUI 可以直接复用现有 image artifact 展示能力。编辑结果沿用原 `assetId`，创建新的 `versionId`，并通过 `parentVersionId` 指向来源版本；不要覆盖旧图片。
+GUI 可以直接复用现有 image artifact 展示能力。编辑结果沿用原 `assetId`，创建新的 `versionId`，并通过 `parentVersionId` 指向来源版本；不要覆盖旧图片。`versionId` 只在所属 asset 内递增，新 asset 的第一张图始终是 `v1`，不能按对话轮次解释成全局 V5。
 
 ## 交互提醒
 
 - `count` 是同一个 `gpt-image-2` 请求需求生成多少张独立候选，不是矩阵、拼图或模型分组。
 - 初稿建议 `medium`、`count: 1`；用户明确需要候选时再增加数量，定稿使用 `high`。
-- 运行中取消后，上游同步请求仍可能继续生成并计费，GUI 应保留工具返回的提示。
+- 用户中断后，上游同步请求仍可能继续生成并计费，GUI 应保留工具返回的提示。
 - 网络断开和超时代表上游结果未知，不会自动重试；只有 Gateway 明确返回 `retryable: true` 才会自动重试。
+- 同一 `toolCallId` 重放会返回已有 operation；同一 ID 携带不同参数会返回幂等冲突。
 - 图片长期保存在当前 workspace 的 `outputs/ecommerce-images/`，Product 不应另建一套图片版本数据库。
 
 ## 验收
 
-1. 新建 workspace，确认四个工具只在 Product 选择后进入 AgentTool definitions。
-2. 激活 `amazon-product-image-generation`，确认 Agent 先提交 generate，再轮询 batch。
-3. 生成 2 张图片，确认得到 2 个独立 `assetId` 和 `v1`。
-4. 选择其中一张编辑，确认同一 `assetId` 新增 `v2`，且 `parentVersionId=v1`。
-5. 重启 Product 后用 list 查询，确认批次、资产和版本历史仍存在。
-6. 取消运行中批次，确认 GUI 展示“上游仍可能继续生成并计费”的提示。
+1. 新建 workspace，确认生图工具只在 Product 选择后进入 AgentTool definitions。
+2. 生成单张图片，确认一次 generate 调用直接得到 `deliveryReady=true` 和真实文件。
+3. 构造慢速多图任务，确认 generate 在中间状态不会提前返回，也不会产生 `nextAction`。
+4. 生成 2 张图片，确认得到 2 个独立 `assetId` 和各自的 `v1`。
+5. 选择其中一张编辑，确认同一 `assetId` 新增 `v2`，且 `parentVersionId=v1`。
+6. 重启 Product 后用 list 查询，确认资产和版本历史仍存在；排障时可用 SDK status 查询历史 batch。
+7. 中断运行中任务，确认本地 queued/running 项全部收敛，且结果提示上游仍可能继续生成和计费。

@@ -12,6 +12,9 @@ import {
   ECOMMERCE_IMAGE_BATCH_TOOL,
   ECOMMERCE_IMAGE_EDIT_TOOL,
   ECOMMERCE_IMAGE_GENERATE_TOOL,
+  ECOMMERCE_IMAGE_JOB_CANCEL_TOOL,
+  ECOMMERCE_IMAGE_JOB_RETRY_TOOL,
+  ECOMMERCE_IMAGE_JOB_STATUS_TOOL,
   ECOMMERCE_IMAGE_LIST_TOOL,
   EXEC_COMMAND_TOOL,
   IMAGE_PRESENT_TOOL,
@@ -58,6 +61,9 @@ const BUILTIN_TOOL_NAMES = new Set([
   ECOMMERCE_IMAGE_GENERATE_TOOL.name,
   ECOMMERCE_IMAGE_EDIT_TOOL.name,
   ECOMMERCE_IMAGE_BATCH_TOOL.name,
+  ECOMMERCE_IMAGE_JOB_STATUS_TOOL.name,
+  ECOMMERCE_IMAGE_JOB_CANCEL_TOOL.name,
+  ECOMMERCE_IMAGE_JOB_RETRY_TOOL.name,
   ECOMMERCE_IMAGE_LIST_TOOL.name,
   VISUALIZATION_CREATE_CHART_TOOL.name,
   VISUALIZATION_CREATE_DASHBOARD_TOOL.name
@@ -120,6 +126,9 @@ export async function createToolRegistry(config, options = {}) {
     addTool(ECOMMERCE_IMAGE_GENERATE_TOOL, (call, _currentConfig, signal) => ecommerceImageRuntime.generate({ ...call, signal }));
     addTool(ECOMMERCE_IMAGE_EDIT_TOOL, (call, _currentConfig, signal) => ecommerceImageRuntime.edit({ ...call, signal }));
     addTool(ECOMMERCE_IMAGE_BATCH_TOOL, (call, _currentConfig, signal) => ecommerceImageRuntime.batch({ ...call, signal }));
+    addTool(ECOMMERCE_IMAGE_JOB_STATUS_TOOL, (call, _currentConfig, signal) => ecommerceImageRuntime.jobStatus({ ...call, signal }));
+    addTool(ECOMMERCE_IMAGE_JOB_CANCEL_TOOL, (call, _currentConfig, signal) => ecommerceImageRuntime.jobCancel({ ...call, signal }));
+    addTool(ECOMMERCE_IMAGE_JOB_RETRY_TOOL, (call, _currentConfig, signal) => ecommerceImageRuntime.jobRetry({ ...call, signal }));
     addTool(ECOMMERCE_IMAGE_LIST_TOOL, (call, _currentConfig, signal) => ecommerceImageRuntime.list({ ...call, signal }));
   }
 
