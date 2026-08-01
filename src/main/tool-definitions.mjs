@@ -589,44 +589,71 @@ const ECOMMERCE_IMAGE_REFERENCE_SCHEMA = {
 
 export const ECOMMERCE_IMAGE_GENERATE_TOOL = {
   name: "ecommerce_image_generate",
-  description: "生成电商图片并在当前工具调用内管理排队、重试、等待、落盘和验证；模型只会收到最终成功、失败或中断结果。",
+  description: "按多个场景请求并发生成电商图片，并在当前工具调用内管理排队、重试、等待、落盘和验证；模型只会收到最终成功、失败或中断结果。",
   defaultVisible: false,
   schema: {
     type: "function",
     function: {
       name: "ecommerce_image_generate",
-      description: "生成 GPT Image 2 电商图片。单图和多图都由工具阻塞到批次终态；只有 deliveryReady=true 且返回 artifact 时才代表图片可交付，不需要调用状态、取消或重试工具。",
+      description: "使用 GPT Image 2 一次提交多个场景请求。通过 basePrompt 和共享参考图保持商品与品牌一致，每个 requests 项描述独立场景及候选数量；工具会受控并发并阻塞到整批终态。只有 deliveryReady=true 且返回 artifact 时才代表图片可交付，不需要调用状态、取消或重试工具。",
       parameters: {
         type: "object",
         additionalProperties: false,
-        required: ["prompt", "size"],
+        required: ["requests"],
         properties: {
           modelId: {
             type: "string",
             enum: ["gpt-image-2"],
             description: "首版只支持 gpt-image-2，省略时使用该默认值。"
           },
-          prompt: {
+          basePrompt: {
             type: "string",
-            description: "本次唯一需求的完整电商生图提示词；不同 prompt 应分别调用本工具。"
-          },
-          size: ECOMMERCE_IMAGE_SIZE_SCHEMA,
-          quality: {
-            type: "string",
-            enum: ["auto", "low", "medium", "high"],
-            description: "本次全部图片共享的质量，默认 auto。"
-          },
-          count: {
-            type: "integer",
-            minimum: 1,
-            maximum: 9,
-            description: "使用同一模型、prompt 和参数生成的独立图片数量，默认 1。"
+            description: "所有场景共享的商品身份、品牌视觉和一致性约束；不要在这里混入单个场景专属要求。"
           },
           referenceImages: {
             type: "array",
             maxItems: 5,
             items: ECOMMERCE_IMAGE_REFERENCE_SCHEMA,
-            description: "本次全部图片共享的可选参考图；每张最多 10MB，合计最多 30MB。"
+            description: "所有场景共享的商品、Logo 或品牌参考图。与每个 request 的追加参考图合并后最多 5 张、合计最多 30MB。"
+          },
+          requests: {
+            type: "array",
+            minItems: 1,
+            maxItems: 9,
+            description: "场景请求数组。所有 count 合计最多生成 9 张图片；不同职责使用不同 request，同一职责的候选使用该 request 的 count。",
+            items: {
+              type: "object",
+              additionalProperties: false,
+              required: ["prompt", "size"],
+              properties: {
+                key: {
+                  type: "string",
+                  description: "可选的场景关联键，例如 white-background 或 lifestyle；批次内必须唯一，省略时按顺序生成 request-1。"
+                },
+                prompt: {
+                  type: "string",
+                  description: "该场景独有的完整生成要求；共享的商品和品牌约束放在 basePrompt。"
+                },
+                count: {
+                  type: "integer",
+                  minimum: 1,
+                  maximum: 9,
+                  description: "该场景生成的独立候选数量，默认 1。"
+                },
+                size: ECOMMERCE_IMAGE_SIZE_SCHEMA,
+                quality: {
+                  type: "string",
+                  enum: ["auto", "low", "medium", "high"],
+                  description: "该场景的图片质量，默认 auto。"
+                },
+                additionalReferenceImages: {
+                  type: "array",
+                  maxItems: 5,
+                  items: ECOMMERCE_IMAGE_REFERENCE_SCHEMA,
+                  description: "仅该场景使用的场景、风格或构图参考图；与共享参考图合并后最多 5 张、合计最多 30MB。"
+                }
+              }
+            }
           },
           output: ECOMMERCE_IMAGE_OUTPUT_SCHEMA
         }
@@ -634,7 +661,7 @@ export const ECOMMERCE_IMAGE_GENERATE_TOOL = {
     }
   },
   permissions: ["workspace.read", "workspace.write", "network.image.generate"],
-  timeoutMs: 1_980_000,
+  timeoutMs: 1_200_000,
   cancelable: true
 };
 
@@ -685,7 +712,7 @@ export const ECOMMERCE_IMAGE_EDIT_TOOL = {
     }
   },
   permissions: ["workspace.read", "workspace.write", "network.image.generate"],
-  timeoutMs: 1_980_000,
+  timeoutMs: 1_200_000,
   cancelable: true
 };
 
@@ -807,7 +834,7 @@ export const ECOMMERCE_IMAGE_JOB_RETRY_TOOL = {
     }
   },
   permissions: ["workspace.read", "workspace.write", "network.image.generate"],
-  timeoutMs: 1_980_000,
+  timeoutMs: 1_200_000,
   cancelable: true
 };
 

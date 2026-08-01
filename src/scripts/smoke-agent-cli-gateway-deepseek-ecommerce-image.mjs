@@ -2,8 +2,9 @@
  * AgentCli、AgentTool、DeepSeek 与真实生图 Gateway 的人工验收。
  *
  * 本脚本不 mock 模型或图片服务，也不读取 provider key。它验证 DeepSeek 能使用
- * 新版专用生图合同完成“生成 v1 -> 编辑 v2”，并以磁盘 manifest、图片 hash 和
- * AgentCli 工具事件作为事实依据。该测试消耗真实模型与生图额度，不进入 release:local。
+ * 新版多场景合同在一次工具调用中并发生成三种职责，再完成“生成 v1 -> 编辑 v2”，
+ * 并以磁盘 manifest、图片 hash 和 AgentCli 工具事件作为事实依据。该测试消耗真实
+ * 模型与生图额度，不进入 release:local。
  */
 
 import assert from "node:assert/strict";
@@ -66,19 +67,50 @@ try {
 
   const generateEvents = await collectChatEvents(agent, [
     "这是一次真实电商生图工具验收。",
-    "请调用 ecommerce_image_generate 生成一张 1024x1024、medium 质量的 PNG 电商主图：纯白背景，画面中央是一只没有品牌文字的青绿色保温杯，柔和棚拍光影，商品完整清晰。",
+    "必须只调用一次 ecommerce_image_generate，并在同一个 requests 数组中生成三张 1024x1024、medium 质量的 PNG 图片。",
+    "共享约束：三张图都是同一只没有品牌文字的青绿色保温杯，保持杯身形状、颜色和杯盖结构一致。",
+    "三个 request 的 key 分别为 white-background、lifestyle、detail：第一张是纯白背景商品主图；第二张是现代厨房自然使用场景；第三张是杯盖与杯口材质细节特写。每个 request 的 count 都是 1。",
     "生成工具会自行等待到最终状态。只能依据 deliveryReady 和 artifact 判断是否完成，不得虚构 operationId、assetId、versionId 或文件路径。"
   ].join("\n"), timeoutMs);
   assertToolSequence(generateEvents, "ecommerce_image_generate");
+  assert.equal(
+    generateEvents.filter(
+      (event) => event.type === "tool_start" && event.toolName === "ecommerce_image_generate"
+    ).length,
+    1,
+    "多场景图片必须通过一次 generate 工具调用提交。"
+  );
   assert.equal(
     generateEvents.some((event) => event.type === "tool_start" && event.toolName === "ecommerce_image_batch"),
     false,
     "新版组合不应调用旧 ecommerce_image_batch。"
   );
 
-  const asset = await readSingleAsset(workspace);
-  assert.deepEqual(asset.versions.map((version) => version.versionId), ["v1"]);
-  await assertStoredVersion(workspace, asset.versions[0]);
+  const batch = await readSingleBatch(workspace);
+  assert.deepEqual(batch.requests.map((request) => request.key), [
+    "white-background",
+    "lifestyle",
+    "detail"
+  ]);
+  assert.equal(batch.items.length, 3);
+  assert.equal(new Set(batch.items.slice(0, 3).map((item) => item.requestKey)).size, 3);
+  const startedTimes = batch.items.map((item) => Date.parse(item.startedAt));
+  assert.equal(startedTimes.every(Number.isFinite), true);
+  assert.ok(
+    Math.max(...startedTimes) - Math.min(...startedTimes) < 5_000,
+    "三个场景应在同一并发波次启动。"
+  );
+
+  const assets = await readAssets(workspace);
+  assert.equal(assets.length, 3, "一次多场景调用应创建三个独立 asset。");
+  for (const candidate of assets) {
+    assert.deepEqual(candidate.versions.map((version) => version.versionId), ["v1"]);
+    await assertStoredVersion(workspace, candidate.versions[0]);
+  }
+  const asset = assets.find(
+    (candidate) => candidate.versions[0].requestKey === "white-background"
+  );
+  assert.ok(asset, "必须能按 requestKey 找到白底图资产。");
 
   const editEvents = await collectChatEvents(agent, [
     "请继续修改刚刚生成的图片。",
@@ -143,12 +175,22 @@ function assertToolSequence(events, expectedToolName) {
   assert.ok(finalAssistantIndex > toolEndIndex, "最终用户回复必须出现在已验证工具结果之后。");
 }
 
-async function readSingleAsset(workspaceRoot) {
+async function readAssets(workspaceRoot) {
   const assetsDirectory = path.join(workspaceRoot, "outputs", "ecommerce-images", "assets");
   const entries = await fs.readdir(assetsDirectory, { withFileTypes: true });
   const assetDirectories = entries.filter((entry) => entry.isDirectory());
-  assert.equal(assetDirectories.length, 1, "首次单图生成必须只创建一个 asset。");
-  return await readAsset(workspaceRoot, assetDirectories[0].name);
+  return await Promise.all(assetDirectories.map((entry) => readAsset(workspaceRoot, entry.name)));
+}
+
+async function readSingleBatch(workspaceRoot) {
+  const batchesDirectory = path.join(workspaceRoot, "outputs", "ecommerce-images", "batches");
+  const entries = (await fs.readdir(batchesDirectory, { withFileTypes: true }))
+    .filter((entry) => entry.isDirectory());
+  assert.equal(entries.length, 1, "首次多场景生成必须只创建一个 batch。");
+  return JSON.parse(await fs.readFile(
+    path.join(batchesDirectory, entries[0].name, "manifest.json"),
+    "utf8"
+  ));
 }
 
 async function readAsset(workspaceRoot, assetId) {

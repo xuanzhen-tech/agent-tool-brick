@@ -119,19 +119,29 @@ const agentTool = new AgentTool({
 });
 ```
 
-首版固定使用 `gpt-image-2`。一次 generate 只提交一个图片需求，根级 `count` 指定使用同一模型、prompt、尺寸、质量和参考图生成多少张独立图片，最多 9 张。当前没有模型分组、行列、矩阵或拼图语义；不同 prompt 应分别调用工具。未来只有在同时装配多个图片模型时，才会单独设计“模型数量 × 每个模型生成数量”的比较合同。
+首版固定使用 `gpt-image-2`。一次 generate 通过 `requests` 提交多个场景，每个场景拥有独立 prompt、尺寸、质量和候选数量；所有场景的 `count` 合计最多 9 张。顶层 `basePrompt` 和 `referenceImages` 用于保持商品、Logo 与品牌视觉一致，每个场景还可追加自己的参考图。`count` 表示同一场景的独立候选，不是矩阵、拼图或模型分组。
 
 ```js
 const submitted = await agentTool.execute("ecommerce_image_generate", {
   modelId: "gpt-image-2",
-  prompt: "白底电商主图，保持商品结构和 Logo",
-  size: { width: 2048, height: 2048 },
-  quality: "high",
-  count: 4,
+  basePrompt: "保持商品结构、颜色、Logo 和品牌视觉一致",
   referenceImages: [{
     path: "uploads/product.png",
     role: "product",
     preserve: "strict"
+  }],
+  requests: [{
+    key: "white-background",
+    prompt: "生成纯白底商品主图",
+    size: { width: 2048, height: 2048 },
+    quality: "high",
+    count: 1
+  }, {
+    key: "lifestyle",
+    prompt: "生成现代厨房使用场景图",
+    size: { width: 2048, height: 2048 },
+    quality: "high",
+    count: 2
   }],
   output: { format: "png" }
 }, { workspace });
@@ -139,7 +149,7 @@ const submitted = await agentTool.execute("ecommerce_image_generate", {
 
 `ecommerce_image_generate` 和 `ecommerce_image_edit` 会在一次工具调用内完成排队、内部重试、等待、落盘和验证。单图与多图都只向模型返回最终成功、失败或中断结果，不返回 `queued/running`，也不要求模型保存 `operationId` 或轮询状态。只有 `deliveryReady=true` 且存在 artifact 时才代表图片可交付。
 
-批次总预算按 `ceil(图片数 / 2) × 390 秒 + 30 秒` 计算，最多 9 张时约 33 分钟。用户中断由 AgentCli 的 `AbortSignal` 直接终止本地批次；已经发给同步上游的请求仍可能继续生成或计费。`ecommerce_image_job_status/cancel/retry` 和旧 `ecommerce_image_batch` 只保留为 SDK/HTTP 兼容与排障入口，不进入模型 definitions。生成结果写入 `outputs/ecommerce-images/`，每张图片都是 `agent-output.v1`、`renderer=ecommerce-image` 的独立 artifact。
+不同场景按轮询顺序进入全局三个并发槽，优先同时启动各场景的首张图。批次总预算按 `ceil(图片数 / 3) × 390 秒 + 30 秒` 计算，最多 9 张时约 20 分钟。用户中断由 AgentCli 的 `AbortSignal` 直接终止本地批次；已经发给同步上游的请求仍可能继续生成或计费。`ecommerce_image_job_status/cancel/retry` 和旧 `ecommerce_image_batch` 只保留为 SDK/HTTP 兼容与排障入口，不进入模型 definitions。生成结果写入 `outputs/ecommerce-images/`，每张图片都是 `agent-output.v1`、`renderer=ecommerce-image` 的独立 artifact，并通过 `requestKey/requestIndex/outputIndex` 关联原场景。
 
 编辑必须指定 `assetId` 和明确的历史 `versionId`。它会把目标版本、修改意见和可选额外参考图重新提交给 GPT Image 2，并在同一资产下创建 `v2`、`v3` 等新版本；原文件永不覆盖。`versionId` 只在所属 `assetId` 内递增，不能根据对话中的生成次数推断全局 V5。`ecommerce_image_list` 可按 batch、asset 或状态查询，asset 查询返回完整父版本、参数、workspace 相对路径和内容哈希。
 

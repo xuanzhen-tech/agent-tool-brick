@@ -2,8 +2,8 @@
 
 ## 版本
 
-- `@xuanzhen-tech/agent-tool-brick@0.8.0`
-- `@xuanzhen-tech/agent-skill-brick@0.8.1`
+- `@xuanzhen-tech/agent-tool-brick@0.9.0`
+- `@xuanzhen-tech/agent-skill-brick@0.8.2`
 - `agent-llm-gateway@0.3.0`，由服务端部署，不是 Product npm 依赖
 
 ## Product 需要做的事
@@ -52,7 +52,8 @@ API易 key、base URL、模型和 provider 超时只由 Gateway 服务端配置�
 `ecommerce_image_generate` 和 `ecommerce_image_edit` 会创建本地任务并等待：
 
 - 单个图片任务的总预算为 390 秒，包含内部安全重试。
-- 多图批次按图片数量和并发数计算预算，最多 9 张时约 33 分钟。
+- generate 可在一个 `requests` 数组中提交白底图、场景图和特写图等不同 prompt，并共享 `basePrompt` 与商品参考图。
+- 不同场景按轮询顺序进入三个全局并发槽，最多 9 张时总预算约 20 分钟。
 - 工具只向模型返回 completed、failed 或 interrupted 最终结果。
 - `deliveryReady=true` 且存在 artifact 才表示图片可交付。
 - 部分成功返回顶层 failed、`operationStatus=partial`，并保留已经验证的 artifacts。
@@ -74,6 +75,9 @@ data.batchId
 data.assetId
 data.versionId
 data.versionScope=asset
+data.requestKey
+data.requestIndex
+data.outputIndex
 files[].path
 ```
 
@@ -81,7 +85,8 @@ GUI 可以直接复用现有 image artifact 展示能力。编辑结果沿用原
 
 ## 交互提醒
 
-- `count` 是同一个 `gpt-image-2` 请求需求生成多少张独立候选，不是矩阵、拼图或模型分组。
+- `requests` 表达不同场景，单个 request 的 `count` 表达该场景的独立候选，不是矩阵、拼图或模型分组。
+- 顶层 `basePrompt/referenceImages` 负责跨场景一致性；场景专属参考图放在 `additionalReferenceImages`。
 - 初稿建议 `medium`、`count: 1`；用户明确需要候选时再增加数量，定稿使用 `high`。
 - 用户中断后，上游同步请求仍可能继续生成并计费，GUI 应保留工具返回的提示。
 - 网络断开和超时代表上游结果未知，不会自动重试；只有 Gateway 明确返回 `retryable: true` 才会自动重试。
@@ -93,7 +98,8 @@ GUI 可以直接复用现有 image artifact 展示能力。编辑结果沿用原
 1. 新建 workspace，确认生图工具只在 Product 选择后进入 AgentTool definitions。
 2. 生成单张图片，确认一次 generate 调用直接得到 `deliveryReady=true` 和真实文件。
 3. 构造慢速多图任务，确认 generate 在中间状态不会提前返回，也不会产生 `nextAction`。
-4. 生成 2 张图片，确认得到 2 个独立 `assetId` 和各自的 `v1`。
-5. 选择其中一张编辑，确认同一 `assetId` 新增 `v2`，且 `parentVersionId=v1`。
-6. 重启 Product 后用 list 查询，确认资产和版本历史仍存在；排障时可用 SDK status 查询历史 batch。
-7. 中断运行中任务，确认本地 queued/running 项全部收敛，且结果提示上游仍可能继续生成和计费。
+4. 一次提交白底、场景、特写三个 request，确认它们并发开始并按 request 分组返回。
+5. 同一场景生成 2 张候选，确认得到 2 个独立 `assetId` 和各自的 `v1`。
+6. 选择其中一张编辑，确认同一 `assetId` 新增 `v2`，且 `parentVersionId=v1`。
+7. 重启 Product 后用 list 查询，确认资产和版本历史仍存在；排障时可用 SDK status 查询历史 batch。
+8. 中断运行中任务，确认本地 queued/running 项全部收敛，且结果提示上游仍可能继续生成和计费。

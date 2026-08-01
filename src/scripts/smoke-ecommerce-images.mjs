@@ -32,6 +32,7 @@ let networkFailures = 0;
 let partialFailures = 0;
 let rejectEnabled = true;
 const providerRequests = [];
+const providerStarts = [];
 
 process.env.AGENT_TOOL_GATEWAY_BASE_URL = "http://gateway.test";
 globalThis.fetch = async (url, init) => {
@@ -41,6 +42,7 @@ globalThis.fetch = async (url, init) => {
     const form = init?.body;
     assert.ok(form instanceof FormData);
     const request = JSON.parse(String(form.get("request")));
+    providerStarts.push({ prompt: request.prompt, startedAt: Date.now() });
     await delay(request.prompt.includes("SLOW") ? 2_000 : 30, init?.signal);
     providerRequests.push({
       url: String(url),
@@ -127,16 +129,41 @@ try {
   assert.equal(schemas.has("ecommerce_image_job_cancel"), false);
   assert.equal(schemas.has("ecommerce_image_job_retry"), false);
   assert.equal(schemas.has("ecommerce_image_batch"), false);
+  const generateParameters = schemas.get("ecommerce_image_generate").parameters;
+  assert.deepEqual(generateParameters.required, ["requests"]);
+  assert.equal(Object.hasOwn(generateParameters.properties, "prompt"), false);
+  assert.equal(Object.hasOwn(generateParameters.properties, "count"), false);
+  assert.equal(generateParameters.properties.requests.maxItems, 9);
 
+  const initialStarts = providerStarts.length;
   const generated = await tool.execute("ecommerce_image_generate", {
-    prompt: "生成白底商品主图",
-    size: { width: 1024, height: 1024 },
-    quality: "high",
-    count: 4,
+    basePrompt: "保持同一商品结构、颜色和品牌 Logo 一致",
     referenceImages: [{
       path: "uploads/product.png",
       role: "product",
       preserve: "strict"
+    }],
+    requests: [{
+      key: "white-background",
+      prompt: "生成白底商品主图",
+      size: { width: 1024, height: 1024 },
+      quality: "high",
+      count: 2
+    }, {
+      key: "lifestyle",
+      prompt: "生成厨房使用场景图",
+      size: { width: 1024, height: 1024 },
+      quality: "high",
+      additionalReferenceImages: [{
+        path: "uploads/product.png",
+        role: "scene",
+        preserve: "loose"
+      }]
+    }, {
+      key: "detail",
+      prompt: "生成商品材质细节特写图",
+      size: { width: 1024, height: 1024 },
+      quality: "high"
     }]
   }, { workspace });
   assert.equal(generated.status, "completed");
@@ -152,11 +179,40 @@ try {
   const completed = generated;
   assert.equal(completed.details.status, "completed");
   assert.equal(completed.details.count, 4);
+  assert.equal(completed.details.basePrompt, "保持同一商品结构、颜色和品牌 Logo 一致");
+  assert.deepEqual(completed.details.requests.map((request) => request.key), [
+    "white-background",
+    "lifestyle",
+    "detail"
+  ]);
   assert.equal(completed.details.progress.completed, 4);
-  assert.deepEqual(completed.details.items.map((item) => item.outputIndex), [1, 2, 3, 4]);
+  assert.equal(completed.details.progress.requested, 4);
+  assert.deepEqual(
+    completed.details.items.map((item) => [item.requestKey, item.outputIndex]),
+    [["white-background", 1], ["white-background", 2], ["lifestyle", 1], ["detail", 1]]
+  );
+  assert.deepEqual(completed.details.groups.map((group) => ({
+    key: group.key,
+    requested: group.requested,
+    completed: group.completed,
+    artifacts: group.artifacts.length
+  })), [
+    { key: "white-background", requested: 2, completed: 2, artifacts: 2 },
+    { key: "lifestyle", requested: 1, completed: 1, artifacts: 1 },
+    { key: "detail", requested: 1, completed: 1, artifacts: 1 }
+  ]);
   assert.equal(completed.artifacts.length, 4);
   assert.equal(new Set(completed.details.items.map((item) => item.assetId)).size, 4);
-  assert.equal(maxActiveRequests, 2);
+  assert.equal(maxActiveRequests, 3);
+  assert.deepEqual(
+    providerStarts.slice(initialStarts, initialStarts + 4).map((entry) => {
+      if (entry.prompt.includes("白底商品主图")) return "white-background";
+      if (entry.prompt.includes("厨房使用场景图")) return "lifestyle";
+      if (entry.prompt.includes("商品材质细节")) return "detail";
+      return "unknown";
+    }),
+    ["white-background", "lifestyle", "detail", "white-background"]
+  );
   const generatedManifest = JSON.parse(await fs.readFile(path.join(
     workspace,
     "outputs",
@@ -166,7 +222,10 @@ try {
     "manifest.json"
   ), "utf8"));
   assert.equal(generatedManifest.count, 4);
-  assert.deepEqual(generatedManifest.items.map((item) => item.outputIndex), [1, 2, 3, 4]);
+  assert.deepEqual(
+    generatedManifest.items.map((item) => [item.requestKey, item.outputIndex]),
+    [["white-background", 1], ["lifestyle", 1], ["detail", 1], ["white-background", 2]]
+  );
   assert.equal(generatedManifest.items.some((item) => "jobIndex" in item || "copyIndex" in item), false);
   for (const artifact of completed.artifacts) {
     assert.equal(artifact.schemaVersion, "agent-output.v1");
@@ -174,17 +233,24 @@ try {
     assert.equal(artifact.renderer, "ecommerce-image");
     assert.equal(artifact.data.versionId, "v1");
     assert.equal(artifact.data.versionScope, "asset");
+    assert.ok(["white-background", "lifestyle", "detail"].includes(artifact.data.requestKey));
+    assert.ok(Number.isInteger(artifact.data.requestIndex));
     const artifactPath = path.join(workspace, ...artifact.files[0].path.split("/"));
     assert.equal(await pathExists(artifactPath), true);
     const artifactBytes = await fs.readFile(artifactPath);
     assert.equal(artifact.files[0].bytes, artifactBytes.byteLength);
     assert.equal(artifact.data.contentHash, sha256(artifactBytes));
   }
-  assert.equal(providerRequests.filter((request) => request.images === 1).length, 4);
+  assert.equal(providerRequests.filter((request) => request.images === 1).length, 3);
+  assert.equal(providerRequests.filter((request) => request.images === 2).length, 1);
   assert.equal(
     providerRequests
-      .filter((request) => request.images === 1)
+      .slice(0, 4)
       .every((request) => request.request.prompt.includes("图片 1: role=product; preserve=strict")),
+    true
+  );
+  assert.equal(
+    providerRequests.slice(0, 4).every((request) => request.request.prompt.includes("所有图片共享约束")),
     true
   );
 
@@ -207,6 +273,7 @@ try {
   ]);
   assert.equal(idempotentReplay.details.operationId, idempotentFirst.details.operationId);
   assert.equal(providerRequests.length, requestsBeforeIdempotency + 1);
+  assert.equal(idempotentFirst.details.groups[0].key, "request-1");
   await fs.rm(path.join(
     workspace,
     "outputs",
@@ -413,6 +480,66 @@ try {
   }, { workspace });
   assert.equal(legacyRetryCompleted.details.operationStatus, "completed");
 
+  // 三个不同场景必须在同一个工具调用内占用三个并发槽，而不是按 request
+  // 串行等待。结果仍按 requestIndex 排序，不能按完成先后漂移。
+  let scenarioActive = 0;
+  let scenarioMaxActive = 0;
+  const scenarioStarts = [];
+  const scenarioRuntime = createEcommerceImageRuntime(tool.config, {
+    imageTimeoutMs: 1_000,
+    batchSettleMs: 20,
+    fetchImage: async (_config, _endpoint, input, signal) => {
+      scenarioActive += 1;
+      scenarioMaxActive = Math.max(scenarioMaxActive, scenarioActive);
+      scenarioStarts.push(input.request.prompt);
+      try {
+        await delay(input.request.prompt.includes("场景 B") ? 90 : 130, signal);
+        return {
+          imageBase64: png.toString("base64"),
+          mimeType: "image/png",
+          providerRequestId: `provider-scenario-${scenarioStarts.length}`
+        };
+      } finally {
+        scenarioActive -= 1;
+      }
+    }
+  });
+  const scenarioStartedAt = Date.now();
+  const scenarios = await scenarioRuntime.generate(runtimeCall({
+    toolCallId: "call-multi-scenario",
+    workspace,
+    arguments: {
+      basePrompt: "所有场景保持同一商品身份",
+      requests: [{
+        key: "scene-a",
+        prompt: "场景 A",
+        size: { width: 1024, height: 1024 },
+        count: 2
+      }, {
+        key: "scene-b",
+        prompt: "场景 B",
+        size: { width: 1024, height: 1024 }
+      }, {
+        key: "scene-c",
+        prompt: "场景 C",
+        size: { width: 1024, height: 1024 }
+      }]
+    }
+  }));
+  const scenarioElapsedMs = Date.now() - scenarioStartedAt;
+  assert.equal(scenarioMaxActive, 3);
+  assert.deepEqual(
+    scenarioStarts.map((prompt) => prompt.match(/场景 [ABC]/)?.[0]),
+    ["场景 A", "场景 B", "场景 C", "场景 A"]
+  );
+  assert.ok(scenarioElapsedMs < 450, `多场景受控并发耗时异常：${scenarioElapsedMs}ms`);
+  assert.deepEqual(scenarios.details.groups.map((group) => group.key), ["scene-a", "scene-b", "scene-c"]);
+  assert.deepEqual(
+    scenarios.artifacts.map((artifact) => [artifact.data.requestKey, artifact.data.outputIndex]),
+    [["scene-a", 1], ["scene-a", 2], ["scene-b", 1], ["scene-c", 1]]
+  );
+  await scenarioRuntime.dispose();
+
   // 使用真实运行时和可中断异步函数验证：多图任务经历中间状态时，
   // generate 自身会持续阻塞到终态，不再把轮询责任交给模型。
   const longPollRuntime = createEcommerceImageRuntime(tool.config, {
@@ -463,7 +590,7 @@ try {
     arguments: {
       prompt: "占用并发槽",
       size: { width: 1024, height: 1024 },
-      count: 2
+      count: 3
     }
   }));
   await delay(20);
@@ -566,6 +693,69 @@ try {
   assert.equal(oversized.status, "failed");
   assert.match(oversized.error.message, /1 到 9/);
 
+  const emptyRequests = await tool.execute("ecommerce_image_generate", {
+    requests: []
+  }, { workspace });
+  assert.equal(emptyRequests.status, "failed");
+  assert.equal(emptyRequests.error.code, "ecommerce_image_requests_required");
+
+  const duplicateRequestKeys = await tool.execute("ecommerce_image_generate", {
+    requests: [{
+      key: "same",
+      prompt: "请求一",
+      size: { width: 1024, height: 1024 }
+    }, {
+      key: "same",
+      prompt: "请求二",
+      size: { width: 1024, height: 1024 }
+    }]
+  }, { workspace });
+  assert.equal(duplicateRequestKeys.status, "failed");
+  assert.equal(duplicateRequestKeys.error.code, "ecommerce_image_duplicate_request_key");
+
+  const tooManyOutputs = await tool.execute("ecommerce_image_generate", {
+    requests: [{
+      prompt: "请求一",
+      size: { width: 1024, height: 1024 },
+      count: 5
+    }, {
+      prompt: "请求二",
+      size: { width: 1024, height: 1024 },
+      count: 5
+    }]
+  }, { workspace });
+  assert.equal(tooManyOutputs.status, "failed");
+  assert.equal(tooManyOutputs.error.code, "ecommerce_image_too_many_outputs");
+
+  const mixedContract = await tool.execute("ecommerce_image_generate", {
+    prompt: "旧参数",
+    requests: [{
+      prompt: "新参数",
+      size: { width: 1024, height: 1024 }
+    }]
+  }, { workspace });
+  assert.equal(mixedContract.status, "failed");
+  assert.equal(mixedContract.error.code, "ecommerce_image_mixed_generate_contract");
+
+  const tooManyMergedReferences = await tool.execute("ecommerce_image_generate", {
+    referenceImages: Array.from({ length: 3 }, () => ({
+      path: "uploads/product.png",
+      role: "product",
+      preserve: "strict"
+    })),
+    requests: [{
+      prompt: "参考图合并超限",
+      size: { width: 1024, height: 1024 },
+      additionalReferenceImages: Array.from({ length: 3 }, () => ({
+        path: "uploads/product.png",
+        role: "scene",
+        preserve: "loose"
+      }))
+    }]
+  }, { workspace });
+  assert.equal(tooManyMergedReferences.status, "failed");
+  assert.equal(tooManyMergedReferences.error.code, "ecommerce_image_invalid_references");
+
   const legacyJobs = await tool.execute("ecommerce_image_generate", {
     jobs: [{
       prompt: "旧版 jobs 合同",
@@ -627,7 +817,7 @@ try {
   assert.equal(recoveredAsset.details.assets[0].versions[0].status, "interrupted");
 
   console.log("[smoke-ecommerce-images] default hidden ok");
-  console.log("[smoke-ecommerce-images] one prompt x count outputs ok");
+  console.log("[smoke-ecommerce-images] multi-scenario requests and legacy prompt/count ok");
   console.log("[smoke-ecommerce-images] edit history v1 -> v2 ok");
   console.log("[smoke-ecommerce-images] concurrent edit version lock ok");
   console.log("[smoke-ecommerce-images] concurrency and retry policy ok");

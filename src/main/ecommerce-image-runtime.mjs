@@ -21,7 +21,7 @@ const MAX_WAIT_MS = 30_000;
 const SINGLE_IMAGE_TIMEOUT_MS = 390_000;
 const BATCH_SETTLE_MS = 30_000;
 const MAX_RETRIES = 2;
-const CONCURRENCY = 2;
+const CONCURRENCY = 3;
 const TERMINAL_ITEM_STATUSES = new Set(["completed", "failed", "cancelled", "interrupted"]);
 const TERMINAL_BATCH_STATUSES = new Set(["partial", "completed", "failed", "cancelled", "interrupted"]);
 const IMAGE_TYPES = new Map([
@@ -114,36 +114,47 @@ export class EcommerceImageRuntime {
         status: "queued",
         createdAt: nowIso(),
         updatedAt: nowIso(),
-        count: input.count,
+        count: input.totalCount,
+        basePrompt: input.basePrompt,
+        requests: input.requests.map(publicGenerateRequest),
         output: input.output,
         ...identity,
         items: []
       };
 
-      for (let outputIndex = 1; outputIndex <= input.count; outputIndex += 1) {
-        const assetId = createId("asset");
-        const item = {
-          itemId: createId("item"),
-          kind: "generate",
-          status: "queued",
-          outputIndex,
-          prompt: input.prompt,
-          size: input.size,
-          quality: input.quality,
-          output: input.output,
-          references: input.references,
-          assetId,
-          versionId: "v1",
-          attempts: 0,
-          createdAt: nowIso(),
-          updatedAt: nowIso()
-        };
-        batch.items.push(item);
-        await this.#writeAssetManifest(workspace, createAssetManifest({
-          assetId,
-          batchId: batch.batchId,
-          item
-        }));
+      // 按候选序号跨场景轮询展开，确保每个场景的首张图优先进入并发槽，
+      // 避免第一个场景的多个候选阻塞后续场景。
+      const maximumCount = Math.max(...input.requests.map((request) => request.count));
+      for (let outputIndex = 1; outputIndex <= maximumCount; outputIndex += 1) {
+        for (const request of input.requests) {
+          if (outputIndex > request.count) continue;
+          const assetId = createId("asset");
+          const item = {
+            itemId: createId("item"),
+            kind: "generate",
+            status: "queued",
+            requestKey: request.key,
+            requestIndex: request.requestIndex,
+            outputIndex,
+            basePrompt: input.basePrompt,
+            prompt: request.prompt,
+            size: request.size,
+            quality: request.quality,
+            output: input.output,
+            references: request.references,
+            assetId,
+            versionId: "v1",
+            attempts: 0,
+            createdAt: nowIso(),
+            updatedAt: nowIso()
+          };
+          batch.items.push(item);
+          await this.#writeAssetManifest(workspace, createAssetManifest({
+            assetId,
+            batchId: batch.batchId,
+            item
+          }));
+        }
       }
       return batch;
     });
@@ -415,7 +426,12 @@ export class EcommerceImageRuntime {
     }
     const request = {
       modelId: MODEL_ID,
-      prompt: renderProviderPrompt(item.prompt, item.references ?? [], item.kind === "edit"),
+      prompt: renderProviderPrompt(
+        item.prompt,
+        item.references ?? [],
+        item.kind === "edit",
+        item.basePrompt
+      ),
       size: item.size,
       quality: item.quality,
       output: item.output
@@ -660,17 +676,13 @@ export class EcommerceImageRuntime {
       throw invalidInput("ecommerce_image_nothing_to_retry", "该批次没有 failed 或 interrupted 项目。");
     }
     if (original.type === "generate") {
-      const first = retryable[0];
       return await this.#submitGenerate({
         ...call,
         idempotencyOperation: `retry:${batchId}:generate`,
         arguments: {
           modelId: original.modelId,
-          prompt: first.prompt,
-          size: first.size,
-          quality: first.quality,
-          count: retryable.length,
-          referenceImages: (first.references ?? []).map(storedReferenceToInput),
+          basePrompt: original.basePrompt,
+          requests: buildRetryGenerateRequests(retryable),
           output: original.output
         }
       });
@@ -848,16 +860,105 @@ export class EcommerceImageRuntime {
 
 async function normalizeGenerateInput(value, workspace) {
   assertRecord(value, "ecommerce_image_generate 参数必须是对象。");
-  assertAllowedKeys(value, ["modelId", "prompt", "size", "quality", "count", "referenceImages", "output"]);
+  assertAllowedKeys(value, [
+    "modelId",
+    "basePrompt",
+    "requests",
+    "referenceImages",
+    "output",
+    // 旧 SDK/HTTP 合同只在运行时兼容，不再出现在模型 schema 中。
+    "prompt",
+    "size",
+    "quality",
+    "count"
+  ]);
   const modelId = normalizeModel(value.modelId);
+  const sharedReferences = await normalizeReferences(value.referenceImages, workspace);
+  const output = normalizeOutput(value.output);
+
+  if (value.requests !== undefined) {
+    if (["prompt", "size", "quality", "count"].some((key) => value[key] !== undefined)) {
+      throw invalidInput(
+        "ecommerce_image_mixed_generate_contract",
+        "requests 不能与旧版 prompt、size、quality 或 count 同时使用。"
+      );
+    }
+    if (!Array.isArray(value.requests) || !value.requests.length || value.requests.length > MAX_BATCH_IMAGES) {
+      throw invalidInput(
+        "ecommerce_image_requests_required",
+        `requests 必须是 1 到 ${MAX_BATCH_IMAGES} 项的数组。`
+      );
+    }
+    const seenKeys = new Set();
+    const requests = [];
+    let totalCount = 0;
+    for (let index = 0; index < value.requests.length; index += 1) {
+      const rawRequest = value.requests[index];
+      assertRecord(rawRequest, "每个生图 request 必须是对象。");
+      assertAllowedKeys(rawRequest, [
+        "key",
+        "prompt",
+        "count",
+        "size",
+        "quality",
+        "additionalReferenceImages"
+      ]);
+      const requestKey = normalizeRequestKey(rawRequest.key, index + 1);
+      if (seenKeys.has(requestKey)) {
+        throw invalidInput("ecommerce_image_duplicate_request_key", `request key 重复：${requestKey}`);
+      }
+      seenKeys.add(requestKey);
+      const count = rawRequest.count === undefined
+        ? 1
+        : normalizeInteger(rawRequest.count, "request.count", 1, MAX_BATCH_IMAGES);
+      totalCount += count;
+      if (totalCount > MAX_BATCH_IMAGES) {
+        throw invalidInput(
+          "ecommerce_image_too_many_outputs",
+          `所有 request 的 count 合计不能超过 ${MAX_BATCH_IMAGES}。`
+        );
+      }
+      const additionalReferences = await normalizeReferences(
+        rawRequest.additionalReferenceImages,
+        workspace
+      );
+      requests.push({
+        key: requestKey,
+        requestIndex: index + 1,
+        prompt: normalizePrompt(rawRequest.prompt),
+        size: normalizeSize(rawRequest.size),
+        quality: normalizeQuality(rawRequest.quality),
+        count,
+        references: mergeReferences(sharedReferences, additionalReferences)
+      });
+    }
+    return {
+      modelId,
+      basePrompt: normalizeOptionalPrompt(value.basePrompt, "basePrompt"),
+      requests,
+      totalCount,
+      output
+    };
+  }
+
+  // 旧版单 prompt 合同归一化成一个 request，已有 SDK/HTTP 调用继续工作。
+  const legacyCount = value.count === undefined
+    ? 1
+    : normalizeInteger(value.count, "count", 1, MAX_BATCH_IMAGES);
   return {
     modelId,
-    prompt: normalizePrompt(value.prompt),
-    size: normalizeSize(value.size),
-    quality: normalizeQuality(value.quality),
-    count: value.count === undefined ? 1 : normalizeInteger(value.count, "count", 1, MAX_BATCH_IMAGES),
-    references: await normalizeReferences(value.referenceImages, workspace),
-    output: normalizeOutput(value.output)
+    basePrompt: normalizeOptionalPrompt(value.basePrompt, "basePrompt"),
+    requests: [{
+      key: "request-1",
+      requestIndex: 1,
+      prompt: normalizePrompt(value.prompt),
+      size: normalizeSize(value.size),
+      quality: normalizeQuality(value.quality),
+      count: legacyCount,
+      references: sharedReferences
+    }],
+    totalCount: legacyCount,
+    output
   };
 }
 
@@ -1023,6 +1124,42 @@ function normalizePrompt(value) {
   return prompt;
 }
 
+function normalizeOptionalPrompt(value, field) {
+  if (value === undefined) return undefined;
+  const prompt = typeof value === "string" ? value.trim() : "";
+  if (!prompt || prompt.length > 8_000) {
+    throw invalidInput("ecommerce_image_invalid_prompt", `${field} 必须是 1 到 8000 个字符。`);
+  }
+  return prompt;
+}
+
+function normalizeRequestKey(value, requestIndex) {
+  if (value === undefined) return `request-${requestIndex}`;
+  const key = typeof value === "string" ? value.trim() : "";
+  if (!key || key.length > 100 || key.includes("\0")) {
+    throw invalidInput("ecommerce_image_invalid_request_key", "request key 必须是 1 到 100 个字符。");
+  }
+  return key;
+}
+
+function mergeReferences(sharedReferences, additionalReferences) {
+  const references = [...sharedReferences, ...additionalReferences];
+  if (references.length > MAX_REFERENCES) {
+    throw invalidInput(
+      "ecommerce_image_invalid_references",
+      `共享与场景追加参考图合并后最多 ${MAX_REFERENCES} 张。`
+    );
+  }
+  const totalBytes = references.reduce((sum, reference) => sum + reference.bytes, 0);
+  if (totalBytes > MAX_REFERENCE_BYTES) {
+    throw invalidInput(
+      "ecommerce_image_references_too_large",
+      "共享与场景追加参考图合计不能超过 30MB。"
+    );
+  }
+  return references;
+}
+
 function normalizeQuality(value) {
   const quality = value === undefined ? "auto" : String(value).trim();
   if (!QUALITY_VALUES.has(quality)) throw invalidInput("ecommerce_image_invalid_quality", "quality 必须是 auto、low、medium 或 high。");
@@ -1067,8 +1204,10 @@ function normalizeOutput(value) {
   return { format, ...(compression !== undefined ? { compression } : {}) };
 }
 
-function renderProviderPrompt(prompt, references, editing) {
-  const lines = [prompt];
+function renderProviderPrompt(prompt, references, editing, basePrompt) {
+  const lines = [];
+  if (basePrompt) lines.push(`所有图片共享约束：\n${basePrompt}`);
+  lines.push(prompt);
   if (editing) {
     lines.push("图片 1 是待编辑的目标版本。未明确要求变更的商品结构、颜色、文字和 Logo 必须保持不变。");
   }
@@ -1080,6 +1219,39 @@ function renderProviderPrompt(prompt, references, editing) {
     });
   }
   return lines.join("\n\n");
+}
+
+function publicGenerateRequest(request) {
+  return {
+    key: request.key,
+    requestIndex: request.requestIndex,
+    prompt: request.prompt,
+    count: request.count,
+    size: request.size,
+    quality: request.quality,
+    references: request.references
+  };
+}
+
+function buildRetryGenerateRequests(items) {
+  const groups = new Map();
+  for (const item of [...items].sort(compareOutputItems)) {
+    const key = item.requestKey ?? "request-1";
+    const existing = groups.get(key);
+    if (existing) {
+      existing.count += 1;
+      continue;
+    }
+    groups.set(key, {
+      key,
+      prompt: item.prompt,
+      count: 1,
+      size: item.size,
+      quality: item.quality,
+      additionalReferenceImages: (item.references ?? []).map(storedReferenceToInput)
+    });
+  }
+  return [...groups.values()];
 }
 
 function preserveInstruction(value) {
@@ -1135,7 +1307,10 @@ function createAssetVersion({ batchId, item }) {
     batchId,
     status: item.status,
     modelId: MODEL_ID,
+    requestKey: item.requestKey,
+    requestIndex: item.requestIndex,
     outputIndex: item.outputIndex,
+    basePrompt: item.basePrompt,
     prompt: item.prompt,
     size: item.size,
     quality: item.quality,
@@ -1262,6 +1437,7 @@ function calculateBatchWaitMs(imageCount, imageTimeoutMs, settleMs) {
 }
 
 function publicBatch(batch) {
+  const orderedItems = [...batch.items].sort(compareOutputItems);
   return {
     operationId: batch.batchId,
     batchId: batch.batchId,
@@ -1271,8 +1447,14 @@ function publicBatch(batch) {
     createdAt: batch.createdAt,
     updatedAt: batch.updatedAt,
     output: batch.output,
-    ...(batch.type === "generate" ? { count: batch.count } : {}),
+    ...(batch.type === "generate" ? {
+      count: batch.count,
+      basePrompt: batch.basePrompt,
+      requests: batch.requests ?? deriveLegacyRequests(orderedItems),
+      groups: createRequestGroups(batch, orderedItems)
+    } : {}),
     progress: {
+      requested: batch.items.length,
       total: batch.items.length,
       queued: batch.items.filter((item) => item.status === "queued").length,
       running: batch.items.filter((item) => item.status === "running").length,
@@ -1281,9 +1463,11 @@ function publicBatch(batch) {
       cancelled: batch.items.filter((item) => item.status === "cancelled").length,
       interrupted: batch.items.filter((item) => item.status === "interrupted").length
     },
-    items: batch.items.map((item) => ({
+    items: orderedItems.map((item) => ({
       itemId: item.itemId,
       status: item.status,
+      requestKey: item.requestKey ?? "request-1",
+      requestIndex: item.requestIndex ?? 1,
       outputIndex: item.outputIndex,
       assetId: item.assetId,
       versionId: item.versionId,
@@ -1300,7 +1484,8 @@ function publicBatch(batch) {
 }
 
 function createBatchArtifacts(batch) {
-  return batch.items
+  return [...batch.items]
+    .sort(compareOutputItems)
     .filter((item) => item.status === "completed" && item.path)
     .map((item) => createArtifact(item, batch.batchId));
 }
@@ -1330,6 +1515,8 @@ function createArtifact(item, batchId) {
       versionId: item.versionId,
       versionScope: "asset",
       parentVersionId: item.parentVersionId,
+      requestKey: item.requestKey,
+      requestIndex: item.requestIndex,
       outputIndex: item.outputIndex,
       path: item.path,
       contentHash: item.contentHash,
@@ -1338,6 +1525,55 @@ function createArtifact(item, batchId) {
       quality: item.quality
     }
   };
+}
+
+function createRequestGroups(batch, orderedItems = [...batch.items].sort(compareOutputItems)) {
+  const groups = new Map();
+  for (const item of orderedItems) {
+    const key = item.requestKey ?? "request-1";
+    const requestIndex = item.requestIndex ?? 1;
+    let group = groups.get(key);
+    if (!group) {
+      group = {
+        key,
+        requestIndex,
+        requested: 0,
+        completed: 0,
+        failed: 0,
+        queued: 0,
+        running: 0,
+        cancelled: 0,
+        interrupted: 0,
+        artifacts: []
+      };
+      groups.set(key, group);
+    }
+    group.requested += 1;
+    if (Object.hasOwn(group, item.status)) group[item.status] += 1;
+    if (item.status === "completed" && item.path) {
+      group.artifacts.push(createArtifact(item, batch.batchId));
+    }
+  }
+  return [...groups.values()].sort((left, right) => left.requestIndex - right.requestIndex);
+}
+
+function deriveLegacyRequests(items) {
+  if (!items.length) return [];
+  const first = items[0];
+  return [{
+    key: "request-1",
+    requestIndex: 1,
+    prompt: first.prompt,
+    count: items.length,
+    size: first.size,
+    quality: first.quality,
+    references: first.references ?? []
+  }];
+}
+
+function compareOutputItems(left, right) {
+  return (left.requestIndex ?? 1) - (right.requestIndex ?? 1)
+    || (left.outputIndex ?? 1) - (right.outputIndex ?? 1);
 }
 
 function deriveBatchStatus(items) {
