@@ -76,15 +76,24 @@ globalThis.fetch = async (url, init) => {
     if (request.prompt.includes("INVALID_OUTPUT")) {
       return jsonResponse({
         ok: true,
-        modelId: "gpt-image-2",
+        modelId: request.modelId,
         imageBase64: png.toString("base64"),
         mimeType: "image/jpeg",
         providerRequestId: "provider-invalid-output"
       });
     }
+    if (request.prompt.includes("INVALID_MODEL")) {
+      return jsonResponse({
+        ok: true,
+        modelId: request.modelId === "gpt-image-2" ? "doubao-seedream-5-0" : "gpt-image-2",
+        imageBase64: png.toString("base64"),
+        mimeType: "image/png",
+        providerRequestId: "provider-invalid-model"
+      });
+    }
     return jsonResponse({
       ok: true,
-      modelId: "gpt-image-2",
+      modelId: request.modelId,
       imageBase64: png.toString("base64"),
       mimeType: "image/png",
       providerRequestId: `provider-${providerRequests.length}`
@@ -130,7 +139,11 @@ try {
   assert.equal(schemas.has("ecommerce_image_job_retry"), false);
   assert.equal(schemas.has("ecommerce_image_batch"), false);
   const generateParameters = schemas.get("ecommerce_image_generate").parameters;
-  assert.deepEqual(generateParameters.required, ["requests"]);
+  assert.deepEqual(generateParameters.required, ["modelId", "requests"]);
+  assert.deepEqual(generateParameters.properties.modelId.enum, [
+    "gpt-image-2",
+    "doubao-seedream-5-0"
+  ]);
   assert.equal(Object.hasOwn(generateParameters.properties, "prompt"), false);
   assert.equal(Object.hasOwn(generateParameters.properties, "count"), false);
   assert.equal(generateParameters.properties.requests.maxItems, 9);
@@ -254,6 +267,22 @@ try {
     true
   );
 
+  const seedreamProviderStart = providerRequests.length;
+  const seedreamGenerated = await tool.execute("ecommerce_image_generate", {
+    modelId: "doubao-seedream-5-0",
+    requests: [{
+      key: "seedream-lifestyle",
+      prompt: "生成中文电商生活方式场景图",
+      size: { width: 2048, height: 2048 },
+      quality: "high"
+    }],
+    output: { format: "png" }
+  }, { workspace });
+  assert.equal(seedreamGenerated.status, "completed");
+  assert.equal(seedreamGenerated.details.modelId, "doubao-seedream-5-0");
+  assert.equal(seedreamGenerated.artifacts[0].data.modelId, "doubao-seedream-5-0");
+  assert.equal(providerRequests[seedreamProviderStart].request.modelId, "doubao-seedream-5-0");
+
   const requestsBeforeIdempotency = providerRequests.length;
   const idempotentInput = {
     prompt: "验证幂等提交",
@@ -326,11 +355,12 @@ try {
 
   const first = completed.details.items[0];
   const edited = await tool.execute("ecommerce_image_edit", {
+    modelId: "doubao-seedream-5-0",
     edits: [{
       assetId: first.assetId,
       versionId: "v1",
       prompt: "只替换为浅灰棚拍背景，保持商品结构、颜色和 Logo 不变",
-      size: { width: 1024, height: 1024 },
+      size: { width: 2048, height: 2048 },
       quality: "high",
       additionalReferenceImages: [{
         path: "uploads/product.png",
@@ -344,7 +374,9 @@ try {
   assert.equal(editCompleted.details.items[0].assetId, first.assetId);
   assert.equal(editCompleted.details.items[0].versionId, "v2");
   assert.equal(editCompleted.details.items[0].parentVersionId, "v1");
+  assert.equal(editCompleted.details.modelId, "doubao-seedream-5-0");
   assert.equal(providerRequests.at(-1).url.endsWith("/api/tools/ecommerce/images/edit"), true);
+  assert.equal(providerRequests.at(-1).request.modelId, "doubao-seedream-5-0");
   assert.equal(providerRequests.at(-1).images, 2);
   assert.match(providerRequests.at(-1).request.prompt, /图片 1 是待编辑的目标版本/);
   assert.match(providerRequests.at(-1).request.prompt, /图片 2: role=style; preserve=loose/);
@@ -352,6 +384,10 @@ try {
   const history = await tool.execute("ecommerce_image_list", { assetId: first.assetId }, { workspace });
   assert.equal(history.status, "completed");
   assert.deepEqual(history.details.assets[0].versions.map((version) => version.versionId), ["v1", "v2"]);
+  assert.deepEqual(history.details.assets[0].versions.map((version) => version.modelId), [
+    "gpt-image-2",
+    "doubao-seedream-5-0"
+  ]);
   assert.equal(history.details.assets[0].versions.every((version) => version.versionScope === "asset"), true);
   assert.equal(history.artifacts.length, 2);
 
@@ -454,6 +490,16 @@ try {
   assert.equal(invalidOutput.artifacts.length, 0);
   assert.equal(invalidOutput.error.code, "ecommerce_image_invalid_gateway_response");
 
+  const invalidModelResponse = await tool.execute("ecommerce_image_generate", {
+    modelId: "doubao-seedream-5-0",
+    requests: [{
+      prompt: "INVALID_MODEL",
+      size: { width: 2048, height: 2048 }
+    }]
+  }, { workspace });
+  assert.equal(invalidModelResponse.status, "failed");
+  assert.equal(invalidModelResponse.error.code, "ecommerce_image_invalid_gateway_response");
+
   const legacyRejected = await tool.execute("ecommerce_image_generate", {
     prompt: "REJECT legacy retry",
     size: { width: 1024, height: 1024 }
@@ -495,6 +541,7 @@ try {
       try {
         await delay(input.request.prompt.includes("场景 B") ? 90 : 130, signal);
         return {
+          modelId: input.request.modelId,
           imageBase64: png.toString("base64"),
           mimeType: "image/png",
           providerRequestId: `provider-scenario-${scenarioStarts.length}`
@@ -545,9 +592,10 @@ try {
   const longPollRuntime = createEcommerceImageRuntime(tool.config, {
     imageTimeoutMs: 500,
     batchSettleMs: 20,
-    fetchImage: async (_config, _endpoint, _input, signal) => {
+    fetchImage: async (_config, _endpoint, input, signal) => {
       await delay(150, signal);
       return {
+        modelId: input.request.modelId,
         imageBase64: png.toString("base64"),
         mimeType: "image/png",
         providerRequestId: "provider-long-poll"
@@ -575,9 +623,10 @@ try {
   const batchTimeoutRuntime = createEcommerceImageRuntime(tool.config, {
     imageTimeoutMs: 200,
     batchSettleMs: 20,
-    fetchImage: async (_config, _endpoint, _input, signal) => {
+    fetchImage: async (_config, _endpoint, input, signal) => {
       await delay(150, signal);
       return {
+        modelId: input.request.modelId,
         imageBase64: png.toString("base64"),
         mimeType: "image/png",
         providerRequestId: "provider-batch-timeout"
@@ -659,9 +708,10 @@ try {
   const interruptRuntime = createEcommerceImageRuntime(tool.config, {
     imageTimeoutMs: 5_000,
     batchSettleMs: 20,
-    fetchImage: async (_config, _endpoint, _input, signal) => {
+    fetchImage: async (_config, _endpoint, input, signal) => {
       await delay(2_000, signal);
       return {
+        modelId: input.request.modelId,
         imageBase64: png.toString("base64"),
         mimeType: "image/png",
         providerRequestId: "provider-interrupt"
@@ -692,6 +742,36 @@ try {
   }, { workspace });
   assert.equal(oversized.status, "failed");
   assert.match(oversized.error.message, /1 到 9/);
+
+  const unsupportedModel = await tool.execute("ecommerce_image_generate", {
+    modelId: "unknown-image-model",
+    requests: [{ prompt: "未知模型", size: { width: 2048, height: 2048 } }]
+  }, { workspace });
+  assert.equal(unsupportedModel.status, "failed");
+  assert.equal(unsupportedModel.error.code, "ecommerce_image_model_not_supported");
+
+  const seedreamTooSmall = await tool.execute("ecommerce_image_generate", {
+    modelId: "doubao-seedream-5-0",
+    requests: [{ prompt: "尺寸过小", size: { width: 1024, height: 1024 } }]
+  }, { workspace });
+  assert.equal(seedreamTooSmall.status, "failed");
+  assert.equal(seedreamTooSmall.error.code, "ecommerce_image_invalid_size");
+
+  const seedreamWebp = await tool.execute("ecommerce_image_generate", {
+    modelId: "doubao-seedream-5-0",
+    requests: [{ prompt: "不支持的格式", size: { width: 2048, height: 2048 } }],
+    output: { format: "webp" }
+  }, { workspace });
+  assert.equal(seedreamWebp.status, "failed");
+  assert.equal(seedreamWebp.error.code, "ecommerce_image_output_not_supported");
+
+  const seedreamCompression = await tool.execute("ecommerce_image_generate", {
+    modelId: "doubao-seedream-5-0",
+    requests: [{ prompt: "不支持的压缩率", size: { width: 2048, height: 2048 } }],
+    output: { format: "jpeg", compression: 80 }
+  }, { workspace });
+  assert.equal(seedreamCompression.status, "failed");
+  assert.equal(seedreamCompression.error.code, "ecommerce_image_output_not_supported");
 
   const emptyRequests = await tool.execute("ecommerce_image_generate", {
     requests: []
@@ -831,8 +911,8 @@ try {
   globalThis.fetch = originalFetch;
   if (originalGateway === undefined) delete process.env.AGENT_TOOL_GATEWAY_BASE_URL;
   else process.env.AGENT_TOOL_GATEWAY_BASE_URL = originalGateway;
-  await fs.rm(workspace, { recursive: true, force: true });
-  await fs.rm(outsideDirectory, { recursive: true, force: true });
+  await fs.rm(workspace, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+  await fs.rm(outsideDirectory, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 }
 
 function runtimeCall({ toolCallId, workspace: callWorkspace, arguments: args, signal }) {

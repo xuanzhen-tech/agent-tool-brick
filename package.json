@@ -44,6 +44,7 @@
     "smoke:cli": "node src/cli.mjs version && node src/cli.mjs health --json && node src/cli.mjs diagnostics --json && node src/cli.mjs manifest --json",
     "smoke:contract": "node src/scripts/smoke-contract.mjs",
     "smoke:ecommerce-images": "node src/scripts/smoke-ecommerce-images.mjs",
+    "smoke:ecommerce-images:real": "node src/scripts/smoke-ecommerce-images-real.mjs",
     "smoke:server": "node src/scripts/smoke-server.mjs",
     "smoke:agent-cli-integration": "node scripts/smoke-visualization-agent-integration.mjs",
     "smoke:tools": "node src/scripts/smoke-tools.mjs",
