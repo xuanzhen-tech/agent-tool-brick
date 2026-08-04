@@ -538,11 +538,11 @@ const ECOMMERCE_IMAGE_SIZE_SCHEMA = {
   properties: {
     width: {
       type: "integer",
-      description: "精确输出宽度。必须为 16 的倍数，并满足 GPT Image 2 尺寸合同。"
+      description: "精确输出宽度，必须为 16 的倍数。Seedream 5.0 的宽高乘积至少为 3686400。"
     },
     height: {
       type: "integer",
-      description: "精确输出高度。必须为 16 的倍数，并满足 GPT Image 2 尺寸合同。"
+      description: "精确输出高度，必须为 16 的倍数。全部模型单边不超过 3840、比例不超过 3:1。"
     }
   }
 };
@@ -554,13 +554,13 @@ const ECOMMERCE_IMAGE_OUTPUT_SCHEMA = {
     format: {
       type: "string",
       enum: ["png", "jpeg", "webp"],
-      description: "输出格式，默认 png。"
+      description: "输出格式，默认 png。Seedream 5.0 只支持 png 或 jpeg。"
     },
     compression: {
       type: "integer",
       minimum: 0,
       maximum: 100,
-      description: "仅 JPEG/WebP 可用的压缩质量。PNG 不允许传入。"
+      description: "仅 GPT Image 2 的 JPEG/WebP 可用。PNG 与 Seedream 5.0 不允许传入。"
     }
   }
 };
@@ -595,16 +595,16 @@ export const ECOMMERCE_IMAGE_GENERATE_TOOL = {
     type: "function",
     function: {
       name: "ecommerce_image_generate",
-      description: "使用 GPT Image 2 一次提交多个场景请求。通过 basePrompt 和共享参考图保持商品与品牌一致，每个 requests 项描述独立场景及候选数量；工具会受控并发并阻塞到整批终态。只有 deliveryReady=true 且返回 artifact 时才代表图片可交付，不需要调用状态、取消或重试工具。",
+      description: "选择 GPT Image 2 或 Seedream 5.0 一次提交多个场景请求。通过 basePrompt 和共享参考图保持商品与品牌一致，每个 requests 项描述独立场景及候选数量；工具会受控并发并阻塞到整批终态。只有 deliveryReady=true 且返回 artifact 时才代表图片可交付，不需要调用状态、取消或重试工具。",
       parameters: {
         type: "object",
         additionalProperties: false,
-        required: ["requests"],
+        required: ["modelId", "requests"],
         properties: {
           modelId: {
             type: "string",
-            enum: ["gpt-image-2"],
-            description: "首版只支持 gpt-image-2，省略时使用该默认值。"
+            enum: ["gpt-image-2", "doubao-seedream-5-0"],
+            description: "本批次使用的图片模型。优先遵循用户偏好或已激活 skill 的指引；没有明确偏好时使用 gpt-image-2，不要只为该技术参数追问用户。"
           },
           basePrompt: {
             type: "string",
@@ -644,7 +644,7 @@ export const ECOMMERCE_IMAGE_GENERATE_TOOL = {
                 quality: {
                   type: "string",
                   enum: ["auto", "low", "medium", "high"],
-                  description: "该场景的图片质量，默认 auto。"
+                  description: "该场景的质量偏好，默认 auto。Seedream 5.0 主要由精确 size 控制输出。"
                 },
                 additionalReferenceImages: {
                   type: "array",
@@ -673,16 +673,16 @@ export const ECOMMERCE_IMAGE_EDIT_TOOL = {
     type: "function",
     function: {
       name: "ecommerce_image_edit",
-      description: "把目标版本、修改意见和可选参考图提交给 GPT Image 2。工具会等待整个编辑批次终结；只有 deliveryReady=true 才可交付，versionId 只在所属 assetId 内递增。",
+      description: "把目标版本、修改意见和可选参考图提交给所选图片模型。允许使用与来源版本不同的模型继续编辑；工具会等待整个编辑批次终结，只有 deliveryReady=true 才可交付，versionId 只在所属 assetId 内递增。",
       parameters: {
         type: "object",
         additionalProperties: false,
-        required: ["edits"],
+        required: ["modelId", "edits"],
         properties: {
           modelId: {
             type: "string",
-            enum: ["gpt-image-2"],
-            description: "首版只支持 gpt-image-2，省略时使用该默认值。"
+            enum: ["gpt-image-2", "doubao-seedream-5-0"],
+            description: "本批编辑使用的图片模型，可与来源资产版本的模型不同。"
           },
           edits: {
             type: "array",

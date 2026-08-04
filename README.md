@@ -119,7 +119,9 @@ const agentTool = new AgentTool({
 });
 ```
 
-首版固定使用 `gpt-image-2`。一次 generate 通过 `requests` 提交多个场景，每个场景拥有独立 prompt、尺寸、质量和候选数量；所有场景的 `count` 合计最多 9 张。顶层 `basePrompt` 和 `referenceImages` 用于保持商品、Logo 与品牌视觉一致，每个场景还可追加自己的参考图。`count` 表示同一场景的独立候选，不是矩阵、拼图或模型分组。
+`modelId` 必须从 `gpt-image-2` 和 `doubao-seedream-5-0` 中选择，Gateway 分别路由到 API易和火山方舟；AgentTool 不接触 provider key 或带日期的内部模型名。一次 generate 通过 `requests` 提交多个场景，每个场景拥有独立 prompt、尺寸、质量和候选数量；所有场景的 `count` 合计最多 9 张。顶层 `basePrompt` 和 `referenceImages` 用于保持商品、Logo 与品牌视觉一致，每个场景还可追加自己的参考图。`count` 表示同一场景的独立候选，不是矩阵、拼图或模型分组。
+
+Seedream 5.0 使用独立的模型级合同：总像素至少为 3,686,400，只支持 PNG/JPEG 且不接受自定义压缩率；GPT Image 2 保持原尺寸与 PNG/JPEG/WebP 合同。旧 Object/HTTP 调用省略 `modelId` 时仍兼容默认 `gpt-image-2`，但模型可见的 Tool Schema 要求显式选择，确保新任务的资产、重试和后续编辑都能追踪真实模型。
 
 ```js
 const submitted = await agentTool.execute("ecommerce_image_generate", {
@@ -151,7 +153,7 @@ const submitted = await agentTool.execute("ecommerce_image_generate", {
 
 不同场景按轮询顺序进入全局三个并发槽，优先同时启动各场景的首张图。批次总预算按 `ceil(图片数 / 3) × 390 秒 + 30 秒` 计算，最多 9 张时约 20 分钟。用户中断由 AgentCli 的 `AbortSignal` 直接终止本地批次；已经发给同步上游的请求仍可能继续生成或计费。`ecommerce_image_job_status/cancel/retry` 和旧 `ecommerce_image_batch` 只保留为 SDK/HTTP 兼容与排障入口，不进入模型 definitions。生成结果写入 `outputs/ecommerce-images/`，每张图片都是 `agent-output.v1`、`renderer=ecommerce-image` 的独立 artifact，并通过 `requestKey/requestIndex/outputIndex` 关联原场景。
 
-编辑必须指定 `assetId` 和明确的历史 `versionId`。它会把目标版本、修改意见和可选额外参考图重新提交给 GPT Image 2，并在同一资产下创建 `v2`、`v3` 等新版本；原文件永不覆盖。`versionId` 只在所属 `assetId` 内递增，不能根据对话中的生成次数推断全局 V5。`ecommerce_image_list` 可按 batch、asset 或状态查询，asset 查询返回完整父版本、参数、workspace 相对路径和内容哈希。
+编辑必须指定 `assetId` 和明确的历史 `versionId`。它会把目标版本、修改意见和可选额外参考图提交给所选模型，并在同一资产下创建 `v2`、`v3` 等新版本；允许 GPT 与 Seedream 交叉编辑，原文件永不覆盖。`versionId` 只在所属 `assetId` 内递增，不能根据对话中的生成次数推断全局 V5。`ecommerce_image_list` 可按 batch、asset 或状态查询，asset 查询返回完整父版本、模型、参数、workspace 相对路径和内容哈希。
 
 参考图只接受当前 workspace 内的 PNG/JPEG/WebP。运行时通过 realpath 阻止路径和符号链接越界，每张最多 10MB、每个 job 最多 5 张且合计最多 30MB；内容按 SHA-256 去重到 `outputs/ecommerce-images/sources/`。AgentTool 不保存 provider key，图片通过 multipart 发送到 Server Tool Gateway。
 

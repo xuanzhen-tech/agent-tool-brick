@@ -12,7 +12,10 @@ import path from "node:path";
 import { postServerToolGatewayMultipart } from "./server-tool-gateway.mjs";
 
 const SCHEMA_VERSION = "agent-ecommerce-image.manifest.v1";
-const MODEL_ID = "gpt-image-2";
+const DEFAULT_MODEL_ID = "gpt-image-2";
+const SEEDREAM_MODEL_ID = "doubao-seedream-5-0";
+const SUPPORTED_MODEL_IDS = new Set([DEFAULT_MODEL_ID, SEEDREAM_MODEL_ID]);
+const SEEDREAM_MIN_PIXELS = 3_686_400;
 const MAX_BATCH_IMAGES = 9;
 const MAX_REFERENCES = 5;
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
@@ -132,6 +135,7 @@ export class EcommerceImageRuntime {
           const item = {
             itemId: createId("item"),
             kind: "generate",
+            modelId: input.modelId,
             status: "queued",
             requestKey: request.key,
             requestIndex: request.requestIndex,
@@ -191,6 +195,7 @@ export class EcommerceImageRuntime {
           const nextItem = {
             itemId: createId("item"),
             kind: "edit",
+            modelId: input.modelId,
             status: "queued",
             editIndex: index + 1,
             prompt: edit.prompt,
@@ -381,7 +386,11 @@ export class EcommerceImageRuntime {
         controller.signal
       );
       if (controller.signal.aborted) throw controller.signal.reason ?? new Error("图片任务已取消。");
-      const outputBytes = decodeOutputImage(response, item.output.format);
+      const outputBytes = decodeOutputImage(
+        response,
+        item.output.format,
+        item.modelId ?? DEFAULT_MODEL_ID
+      );
       const outputPath = assetVersionPath(item.assetId, item.versionId, response.mimeType);
       const absoluteOutputPath = path.join(entry.workspace, ...outputPath.split("/"));
       await atomicWriteBuffer(absoluteOutputPath, outputBytes);
@@ -425,7 +434,7 @@ export class EcommerceImageRuntime {
       images.push(await readStoredImage(workspace, reference.sourcePath));
     }
     const request = {
-      modelId: MODEL_ID,
+      modelId: item.modelId ?? DEFAULT_MODEL_ID,
       prompt: renderProviderPrompt(
         item.prompt,
         item.references ?? [],
@@ -874,7 +883,7 @@ async function normalizeGenerateInput(value, workspace) {
   ]);
   const modelId = normalizeModel(value.modelId);
   const sharedReferences = await normalizeReferences(value.referenceImages, workspace);
-  const output = normalizeOutput(value.output);
+  const output = normalizeOutput(value.output, modelId);
 
   if (value.requests !== undefined) {
     if (["prompt", "size", "quality", "count"].some((key) => value[key] !== undefined)) {
@@ -926,7 +935,7 @@ async function normalizeGenerateInput(value, workspace) {
         key: requestKey,
         requestIndex: index + 1,
         prompt: normalizePrompt(rawRequest.prompt),
-        size: normalizeSize(rawRequest.size),
+        size: normalizeSize(rawRequest.size, modelId),
         quality: normalizeQuality(rawRequest.quality),
         count,
         references: mergeReferences(sharedReferences, additionalReferences)
@@ -952,7 +961,7 @@ async function normalizeGenerateInput(value, workspace) {
       key: "request-1",
       requestIndex: 1,
       prompt: normalizePrompt(value.prompt),
-      size: normalizeSize(value.size),
+      size: normalizeSize(value.size, modelId),
       quality: normalizeQuality(value.quality),
       count: legacyCount,
       references: sharedReferences
@@ -983,12 +992,12 @@ async function normalizeEditInput(value, workspace) {
       assetId,
       versionId: normalizeVersionId(rawEdit.versionId),
       prompt: normalizePrompt(rawEdit.prompt),
-      size: normalizeSize(rawEdit.size),
+      size: normalizeSize(rawEdit.size, modelId),
       quality: normalizeQuality(rawEdit.quality),
       references: await normalizeReferences(rawEdit.additionalReferenceImages, workspace)
     });
   }
-  return { modelId, edits, output: normalizeOutput(value.output) };
+  return { modelId, edits, output: normalizeOutput(value.output, modelId) };
 }
 
 function normalizeBatchInput(value) {
@@ -1111,8 +1120,13 @@ async function importWorkspaceImage(workspace, requestedPath) {
 }
 
 function normalizeModel(value) {
-  const modelId = value === undefined ? MODEL_ID : String(value).trim();
-  if (modelId !== MODEL_ID) throw invalidInput("ecommerce_image_model_not_supported", "首版只支持 gpt-image-2。");
+  const modelId = value === undefined ? DEFAULT_MODEL_ID : String(value).trim();
+  if (!SUPPORTED_MODEL_IDS.has(modelId)) {
+    throw invalidInput(
+      "ecommerce_image_model_not_supported",
+      `modelId 必须是 ${[...SUPPORTED_MODEL_IDS].join(" 或 ")}。`
+    );
+  }
   return modelId;
 }
 
@@ -1166,7 +1180,7 @@ function normalizeQuality(value) {
   return quality;
 }
 
-function normalizeSize(value) {
+function normalizeSize(value, modelId = DEFAULT_MODEL_ID) {
   assertRecord(value, "size 必须包含 width 和 height。");
   assertAllowedKeys(value, ["width", "height"]);
   const width = value.width;
@@ -1186,10 +1200,16 @@ function normalizeSize(value) {
       "宽高必须为 16 的倍数，单边不超过 3840，比例不超过 3:1，总像素需位于 655360 到 8294400 之间。"
     );
   }
+  if (modelId === SEEDREAM_MODEL_ID && pixels < SEEDREAM_MIN_PIXELS) {
+    throw invalidInput(
+      "ecommerce_image_invalid_size",
+      `doubao-seedream-5-0 总像素不能低于 ${SEEDREAM_MIN_PIXELS}。`
+    );
+  }
   return { width, height };
 }
 
-function normalizeOutput(value) {
+function normalizeOutput(value, modelId = DEFAULT_MODEL_ID) {
   const output = value === undefined ? {} : value;
   assertRecord(output, "output 必须是对象。");
   assertAllowedKeys(output, ["format", "compression"]);
@@ -1200,6 +1220,18 @@ function normalizeOutput(value) {
     : normalizeInteger(output.compression, "compression", 0, 100);
   if (format === "png" && compression !== undefined) {
     throw invalidInput("ecommerce_image_invalid_compression", "PNG 不支持 output.compression。");
+  }
+  if (modelId === SEEDREAM_MODEL_ID && format === "webp") {
+    throw invalidInput(
+      "ecommerce_image_output_not_supported",
+      "doubao-seedream-5-0 只支持 PNG 或 JPEG 输出。"
+    );
+  }
+  if (modelId === SEEDREAM_MODEL_ID && compression !== undefined) {
+    throw invalidInput(
+      "ecommerce_image_output_not_supported",
+      "doubao-seedream-5-0 不支持自定义 JPEG 压缩率。"
+    );
   }
   return { format, ...(compression !== undefined ? { compression } : {}) };
 }
@@ -1273,8 +1305,13 @@ async function readStoredImage(workspace, workspacePath) {
   };
 }
 
-function decodeOutputImage(response, expectedFormat) {
-  if (!response || typeof response.imageBase64 !== "string" || typeof response.mimeType !== "string") {
+function decodeOutputImage(response, expectedFormat, expectedModelId) {
+  if (
+    !response
+    || typeof response.imageBase64 !== "string"
+    || typeof response.mimeType !== "string"
+    || response.modelId !== expectedModelId
+  ) {
     throw invalidInput("ecommerce_image_invalid_gateway_response", "Gateway 未返回有效图片。");
   }
   const bytes = Buffer.from(response.imageBase64, "base64");
@@ -1306,7 +1343,7 @@ function createAssetVersion({ batchId, item }) {
     parentVersionId: item.parentVersionId,
     batchId,
     status: item.status,
-    modelId: MODEL_ID,
+    modelId: item.modelId ?? DEFAULT_MODEL_ID,
     requestKey: item.requestKey,
     requestIndex: item.requestIndex,
     outputIndex: item.outputIndex,
@@ -1520,7 +1557,7 @@ function createArtifact(item, batchId) {
       outputIndex: item.outputIndex,
       path: item.path,
       contentHash: item.contentHash,
-      modelId: MODEL_ID,
+      modelId: item.modelId ?? DEFAULT_MODEL_ID,
       size: item.size,
       quality: item.quality
     }
