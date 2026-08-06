@@ -42,7 +42,6 @@ const REFERENCE_ROLES = new Set(["product", "logo", "style", "scene", "layout"])
 const PRESERVE_MODES = new Set(["strict", "balanced", "loose"]);
 const QUALITY_VALUES = new Set(["auto", "low", "medium", "high"]);
 const OUTPUT_FORMATS = new Set(["png", "jpeg", "webp"]);
-const ASPECT_RATIO_VALUES = new Set(["1:1", "3:2", "2:3"]);
 const RESOLUTION_VALUES = new Set(["1K", "2K", "4K"]);
 
 export function createEcommerceImageRuntime(config, options = {}) {
@@ -1199,10 +1198,7 @@ function normalizeSizeSelection(value, resolution, modelId = DEFAULT_MODEL_ID) {
         "比例 size 与 resolution 目前只适用于 gpt-image-2；doubao-seedream-5-0 继续使用精确 width/height。"
       );
     }
-    const aspectRatio = value.trim();
-    if (!ASPECT_RATIO_VALUES.has(aspectRatio)) {
-      throw invalidInput("ecommerce_image_invalid_size", "size 必须是 1:1、3:2 或 2:3。");
-    }
+    const aspectRatio = normalizeAspectRatio(value);
     const resolutionTier = typeof resolution === "string" ? resolution.trim() : "";
     if (!RESOLUTION_VALUES.has(resolutionTier)) {
       throw invalidInput("ecommerce_image_invalid_resolution", "使用比例 size 时，resolution 必须是 1K、2K 或 4K。");
@@ -1216,6 +1212,30 @@ function normalizeSizeSelection(value, resolution, modelId = DEFAULT_MODEL_ID) {
     );
   }
   return { size: normalizeExactSize(value, modelId) };
+}
+
+function normalizeAspectRatio(value) {
+  const match = value.trim().match(/^([1-9][0-9]{0,3}):([1-9][0-9]{0,3})$/);
+  if (!match) {
+    throw invalidInput("ecommerce_image_invalid_size", "size 必须使用正整数宽高比，例如 1:1、4:5、16:9 或 9:16。");
+  }
+  const width = Number(match[1]);
+  const height = Number(match[2]);
+  const ratio = width / height;
+  if (ratio > 3 || ratio < 1 / 3) {
+    throw invalidInput("ecommerce_image_invalid_size", "size 的长短边比例不能超过 3:1。");
+  }
+  const divisor = greatestCommonDivisor(width, height);
+  return `${width / divisor}:${height / divisor}`;
+}
+
+function greatestCommonDivisor(left, right) {
+  let a = left;
+  let b = right;
+  while (b !== 0) {
+    [a, b] = [b, a % b];
+  }
+  return a;
 }
 
 function normalizeExactSize(value, modelId = DEFAULT_MODEL_ID) {

@@ -535,19 +535,20 @@ const ECOMMERCE_IMAGE_SIZE_SCHEMA = {
   oneOf: [
     {
       type: "string",
-      enum: ["1:1", "3:2", "2:3"]
+      pattern: "^[1-9][0-9]{0,3}:[1-9][0-9]{0,3}$",
+      description: "GPT Image 2 的宽高比，格式为 宽:高，例如 1:1、4:5、16:9 或 9:16。具体可选项由 Product 决定。"
     },
     {
       type: "object",
       additionalProperties: false,
       required: ["width", "height"],
       properties: {
-        width: { type: "integer" },
-        height: { type: "integer" }
+        width: { type: "integer", description: "精确宽度，不使用固定尺寸枚举。" },
+        height: { type: "integer", description: "精确高度，不使用固定尺寸枚举。" }
       }
     }
   ],
-  description: "GPT Image 2 使用 1:1、3:2 或 2:3，并同时传 resolution。Seedream 5.0 继续使用精确 width/height。"
+  description: "GPT Image 2 使用 宽:高 字符串并同时传 resolution；比例选项由 Product 提供。Seedream 5.0 继续使用精确 width/height。"
 };
 
 const ECOMMERCE_IMAGE_RESOLUTION_SCHEMA = {
