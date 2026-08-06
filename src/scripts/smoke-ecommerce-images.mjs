@@ -43,7 +43,8 @@ globalThis.fetch = async (url, init) => {
     assert.ok(form instanceof FormData);
     const request = JSON.parse(String(form.get("request")));
     providerStarts.push({ prompt: request.prompt, startedAt: Date.now() });
-    await delay(request.prompt.includes("SLOW") ? 2_000 : 30, init?.signal);
+    // 保持请求重叠，避免快速 Windows 调度让并发上限断言偶发只观察到 2。
+    await delay(request.prompt.includes("SLOW") ? 2_000 : 80, init?.signal);
     providerRequests.push({
       url: String(url),
       request,
@@ -149,7 +150,7 @@ try {
   assert.equal(generateParameters.properties.requests.maxItems, 9);
   const generateRequestSchema = generateParameters.properties.requests.items;
   assert.deepEqual(generateRequestSchema.required, ["prompt", "size"]);
-  assert.deepEqual(generateRequestSchema.properties.size.oneOf[0].enum, ["1:1", "3:2", "2:3"]);
+  assert.equal(generateRequestSchema.properties.size.oneOf[0].pattern, "^[1-9][0-9]{0,3}:[1-9][0-9]{0,3}$");
   assert.deepEqual(generateRequestSchema.properties.resolution.enum, ["1K", "2K", "4K"]);
   const editSchema = schemas.get("ecommerce_image_edit").parameters.properties.edits.items;
   assert.deepEqual(editSchema.required, ["assetId", "versionId", "prompt", "size"]);
@@ -172,7 +173,7 @@ try {
     }, {
       key: "lifestyle",
       prompt: "生成厨房使用场景图",
-      size: "3:2",
+      size: "16:9",
       resolution: "4K",
       quality: "high",
       additionalReferenceImages: [{
@@ -183,7 +184,7 @@ try {
     }, {
       key: "detail",
       prompt: "生成商品材质细节特写图",
-      size: "2:3",
+      size: "8:10",
       resolution: "1K",
       quality: "high"
     }]
@@ -251,7 +252,7 @@ try {
   assert.equal(generatedManifest.items.some((item) => "jobIndex" in item || "copyIndex" in item), false);
   assert.deepEqual(
     generatedManifest.requests.map((request) => [request.size, request.resolution]),
-    [["1:1", "2K"], ["3:2", "4K"], ["2:3", "1K"]]
+    [["1:1", "2K"], ["16:9", "4K"], ["4:5", "1K"]]
   );
   for (const artifact of completed.artifacts) {
     assert.equal(artifact.schemaVersion, "agent-output.v1");
@@ -281,7 +282,7 @@ try {
   );
   assert.deepEqual(
     providerRequests.slice(0, 4).map((request) => [request.request.size, request.request.resolution]),
-    [["1:1", "2K"], ["3:2", "4K"], ["2:3", "1K"], ["1:1", "2K"]]
+    [["1:1", "2K"], ["16:9", "4K"], ["4:5", "1K"], ["1:1", "2K"]]
   );
 
   const seedreamProviderStart = providerRequests.length;
@@ -640,10 +641,11 @@ try {
   // 批次总预算包含排队时间。即使前一个批次占满并发槽，后续批次到期后
   // 也必须收敛并取消本地任务，不能在模型收到结果后继续后台生图。
   const batchTimeoutRuntime = createEcommerceImageRuntime(tool.config, {
-    imageTimeoutMs: 200,
+    // 为 Windows/Node 调度留出余量，同时保持目标批次必然超过总预算。
+    imageTimeoutMs: 320,
     batchSettleMs: 20,
     fetchImage: async (_config, _endpoint, input, signal) => {
-      await delay(150, signal);
+      await delay(220, signal);
       return {
         modelId: input.request.modelId,
         imageBase64: png.toString("base64"),
@@ -774,6 +776,14 @@ try {
   }, { workspace });
   assert.equal(missingResolution.status, "failed");
   assert.equal(missingResolution.error.code, "ecommerce_image_invalid_resolution");
+
+  for (const size of ["free", "0:1", "4:0", "4:5:6", "4:1"]) {
+    const invalidRatio = await tool.execute("ecommerce_image_generate", {
+      requests: [{ prompt: "非法比例", size, resolution: "1K" }]
+    }, { workspace });
+    assert.equal(invalidRatio.status, "failed");
+    assert.equal(invalidRatio.error.code, "ecommerce_image_invalid_size");
+  }
 
   const mixedSizeContract = await tool.execute("ecommerce_image_generate", {
     requests: [{
