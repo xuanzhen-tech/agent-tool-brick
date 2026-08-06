@@ -42,6 +42,8 @@ const REFERENCE_ROLES = new Set(["product", "logo", "style", "scene", "layout"])
 const PRESERVE_MODES = new Set(["strict", "balanced", "loose"]);
 const QUALITY_VALUES = new Set(["auto", "low", "medium", "high"]);
 const OUTPUT_FORMATS = new Set(["png", "jpeg", "webp"]);
+const ASPECT_RATIO_VALUES = new Set(["1:1", "3:2", "2:3"]);
+const RESOLUTION_VALUES = new Set(["1K", "2K", "4K"]);
 
 export function createEcommerceImageRuntime(config, options = {}) {
   return new EcommerceImageRuntime(config, options);
@@ -143,6 +145,7 @@ export class EcommerceImageRuntime {
             basePrompt: input.basePrompt,
             prompt: request.prompt,
             size: request.size,
+            resolution: request.resolution,
             quality: request.quality,
             output: input.output,
             references: request.references,
@@ -200,6 +203,7 @@ export class EcommerceImageRuntime {
             editIndex: index + 1,
             prompt: edit.prompt,
             size: edit.size,
+            resolution: edit.resolution,
             quality: edit.quality,
             output: input.output,
             references: edit.references,
@@ -442,6 +446,7 @@ export class EcommerceImageRuntime {
         item.basePrompt
       ),
       size: item.size,
+      ...(item.resolution ? { resolution: item.resolution } : {}),
       quality: item.quality,
       output: item.output
     };
@@ -706,6 +711,7 @@ export class EcommerceImageRuntime {
           versionId: item.parentVersionId,
           prompt: item.prompt,
           size: item.size,
+          ...(item.resolution ? { resolution: item.resolution } : {}),
           quality: item.quality,
           additionalReferenceImages: (item.references ?? []).map(storedReferenceToInput)
         })),
@@ -878,6 +884,7 @@ async function normalizeGenerateInput(value, workspace) {
     // 旧 SDK/HTTP 合同只在运行时兼容，不再出现在模型 schema 中。
     "prompt",
     "size",
+    "resolution",
     "quality",
     "count"
   ]);
@@ -886,10 +893,10 @@ async function normalizeGenerateInput(value, workspace) {
   const output = normalizeOutput(value.output, modelId);
 
   if (value.requests !== undefined) {
-    if (["prompt", "size", "quality", "count"].some((key) => value[key] !== undefined)) {
+    if (["prompt", "size", "resolution", "quality", "count"].some((key) => value[key] !== undefined)) {
       throw invalidInput(
         "ecommerce_image_mixed_generate_contract",
-        "requests 不能与旧版 prompt、size、quality 或 count 同时使用。"
+        "requests 不能与旧版 prompt、size、resolution、quality 或 count 同时使用。"
       );
     }
     if (!Array.isArray(value.requests) || !value.requests.length || value.requests.length > MAX_BATCH_IMAGES) {
@@ -909,6 +916,7 @@ async function normalizeGenerateInput(value, workspace) {
         "prompt",
         "count",
         "size",
+        "resolution",
         "quality",
         "additionalReferenceImages"
       ]);
@@ -931,11 +939,12 @@ async function normalizeGenerateInput(value, workspace) {
         rawRequest.additionalReferenceImages,
         workspace
       );
+      const sizeSelection = normalizeSizeSelection(rawRequest.size, rawRequest.resolution, modelId);
       requests.push({
         key: requestKey,
         requestIndex: index + 1,
         prompt: normalizePrompt(rawRequest.prompt),
-        size: normalizeSize(rawRequest.size, modelId),
+        ...sizeSelection,
         quality: normalizeQuality(rawRequest.quality),
         count,
         references: mergeReferences(sharedReferences, additionalReferences)
@@ -954,6 +963,7 @@ async function normalizeGenerateInput(value, workspace) {
   const legacyCount = value.count === undefined
     ? 1
     : normalizeInteger(value.count, "count", 1, MAX_BATCH_IMAGES);
+  const sizeSelection = normalizeSizeSelection(value.size, value.resolution, modelId);
   return {
     modelId,
     basePrompt: normalizeOptionalPrompt(value.basePrompt, "basePrompt"),
@@ -961,7 +971,7 @@ async function normalizeGenerateInput(value, workspace) {
       key: "request-1",
       requestIndex: 1,
       prompt: normalizePrompt(value.prompt),
-      size: normalizeSize(value.size, modelId),
+      ...sizeSelection,
       quality: normalizeQuality(value.quality),
       count: legacyCount,
       references: sharedReferences
@@ -982,17 +992,18 @@ async function normalizeEditInput(value, workspace) {
   const edits = [];
   for (const rawEdit of value.edits) {
     assertRecord(rawEdit, "每个 edit 必须是对象。");
-    assertAllowedKeys(rawEdit, ["assetId", "versionId", "prompt", "size", "quality", "additionalReferenceImages"]);
+    assertAllowedKeys(rawEdit, ["assetId", "versionId", "prompt", "size", "resolution", "quality", "additionalReferenceImages"]);
     const assetId = normalizeId(rawEdit.assetId, "asset", "assetId");
     if (seenAssets.has(assetId)) {
       throw invalidInput("ecommerce_image_duplicate_asset_edit", "同一批次不能同时编辑同一个 assetId。");
     }
     seenAssets.add(assetId);
+    const sizeSelection = normalizeSizeSelection(rawEdit.size, rawEdit.resolution, modelId);
     edits.push({
       assetId,
       versionId: normalizeVersionId(rawEdit.versionId),
       prompt: normalizePrompt(rawEdit.prompt),
-      size: normalizeSize(rawEdit.size, modelId),
+      ...sizeSelection,
       quality: normalizeQuality(rawEdit.quality),
       references: await normalizeReferences(rawEdit.additionalReferenceImages, workspace)
     });
@@ -1180,7 +1191,34 @@ function normalizeQuality(value) {
   return quality;
 }
 
-function normalizeSize(value, modelId = DEFAULT_MODEL_ID) {
+function normalizeSizeSelection(value, resolution, modelId = DEFAULT_MODEL_ID) {
+  if (typeof value === "string") {
+    if (modelId !== DEFAULT_MODEL_ID) {
+      throw invalidInput(
+        "ecommerce_image_invalid_size",
+        "比例 size 与 resolution 目前只适用于 gpt-image-2；doubao-seedream-5-0 继续使用精确 width/height。"
+      );
+    }
+    const aspectRatio = value.trim();
+    if (!ASPECT_RATIO_VALUES.has(aspectRatio)) {
+      throw invalidInput("ecommerce_image_invalid_size", "size 必须是 1:1、3:2 或 2:3。");
+    }
+    const resolutionTier = typeof resolution === "string" ? resolution.trim() : "";
+    if (!RESOLUTION_VALUES.has(resolutionTier)) {
+      throw invalidInput("ecommerce_image_invalid_resolution", "使用比例 size 时，resolution 必须是 1K、2K 或 4K。");
+    }
+    return { size: aspectRatio, resolution: resolutionTier };
+  }
+  if (resolution !== undefined) {
+    throw invalidInput(
+      "ecommerce_image_mixed_size_contract",
+      "旧版精确 size 不能同时传 resolution；请改用比例字符串 size，或只传 width/height。"
+    );
+  }
+  return { size: normalizeExactSize(value, modelId) };
+}
+
+function normalizeExactSize(value, modelId = DEFAULT_MODEL_ID) {
   assertRecord(value, "size 必须包含 width 和 height。");
   assertAllowedKeys(value, ["width", "height"]);
   const width = value.width;
@@ -1260,6 +1298,7 @@ function publicGenerateRequest(request) {
     prompt: request.prompt,
     count: request.count,
     size: request.size,
+    ...(request.resolution ? { resolution: request.resolution } : {}),
     quality: request.quality,
     references: request.references
   };
@@ -1279,6 +1318,7 @@ function buildRetryGenerateRequests(items) {
       prompt: item.prompt,
       count: 1,
       size: item.size,
+      ...(item.resolution ? { resolution: item.resolution } : {}),
       quality: item.quality,
       additionalReferenceImages: (item.references ?? []).map(storedReferenceToInput)
     });
@@ -1350,6 +1390,7 @@ function createAssetVersion({ batchId, item }) {
     basePrompt: item.basePrompt,
     prompt: item.prompt,
     size: item.size,
+    resolution: item.resolution,
     quality: item.quality,
     output: item.output,
     references: item.references,
@@ -1559,6 +1600,7 @@ function createArtifact(item, batchId) {
       contentHash: item.contentHash,
       modelId: item.modelId ?? DEFAULT_MODEL_ID,
       size: item.size,
+      resolution: item.resolution,
       quality: item.quality
     }
   };
@@ -1603,6 +1645,7 @@ function deriveLegacyRequests(items) {
     prompt: first.prompt,
     count: items.length,
     size: first.size,
+    ...(first.resolution ? { resolution: first.resolution } : {}),
     quality: first.quality,
     references: first.references ?? []
   }];

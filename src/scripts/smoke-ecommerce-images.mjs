@@ -147,6 +147,12 @@ try {
   assert.equal(Object.hasOwn(generateParameters.properties, "prompt"), false);
   assert.equal(Object.hasOwn(generateParameters.properties, "count"), false);
   assert.equal(generateParameters.properties.requests.maxItems, 9);
+  const generateRequestSchema = generateParameters.properties.requests.items;
+  assert.deepEqual(generateRequestSchema.required, ["prompt", "size"]);
+  assert.deepEqual(generateRequestSchema.properties.size.oneOf[0].enum, ["1:1", "3:2", "2:3"]);
+  assert.deepEqual(generateRequestSchema.properties.resolution.enum, ["1K", "2K", "4K"]);
+  const editSchema = schemas.get("ecommerce_image_edit").parameters.properties.edits.items;
+  assert.deepEqual(editSchema.required, ["assetId", "versionId", "prompt", "size"]);
 
   const initialStarts = providerStarts.length;
   const generated = await tool.execute("ecommerce_image_generate", {
@@ -159,13 +165,15 @@ try {
     requests: [{
       key: "white-background",
       prompt: "生成白底商品主图",
-      size: { width: 1024, height: 1024 },
+      size: "1:1",
+      resolution: "2K",
       quality: "high",
       count: 2
     }, {
       key: "lifestyle",
       prompt: "生成厨房使用场景图",
-      size: { width: 1024, height: 1024 },
+      size: "3:2",
+      resolution: "4K",
       quality: "high",
       additionalReferenceImages: [{
         path: "uploads/product.png",
@@ -175,7 +183,8 @@ try {
     }, {
       key: "detail",
       prompt: "生成商品材质细节特写图",
-      size: { width: 1024, height: 1024 },
+      size: "2:3",
+      resolution: "1K",
       quality: "high"
     }]
   }, { workspace });
@@ -240,6 +249,10 @@ try {
     [["white-background", 1], ["lifestyle", 1], ["detail", 1], ["white-background", 2]]
   );
   assert.equal(generatedManifest.items.some((item) => "jobIndex" in item || "copyIndex" in item), false);
+  assert.deepEqual(
+    generatedManifest.requests.map((request) => [request.size, request.resolution]),
+    [["1:1", "2K"], ["3:2", "4K"], ["2:3", "1K"]]
+  );
   for (const artifact of completed.artifacts) {
     assert.equal(artifact.schemaVersion, "agent-output.v1");
     assert.equal(artifact.kind, "image");
@@ -265,6 +278,10 @@ try {
   assert.equal(
     providerRequests.slice(0, 4).every((request) => request.request.prompt.includes("所有图片共享约束")),
     true
+  );
+  assert.deepEqual(
+    providerRequests.slice(0, 4).map((request) => [request.request.size, request.request.resolution]),
+    [["1:1", "2K"], ["3:2", "4K"], ["2:3", "1K"], ["1:1", "2K"]]
   );
 
   const seedreamProviderStart = providerRequests.length;
@@ -593,7 +610,9 @@ try {
     imageTimeoutMs: 500,
     batchSettleMs: 20,
     fetchImage: async (_config, _endpoint, input, signal) => {
-      await delay(150, signal);
+      // Keep the blocker below the per-image timeout while leaving enough margin
+      // for the queued target batch to exhaust its total budget on slower Windows CI.
+      await delay(180, signal);
       return {
         modelId: input.request.modelId,
         imageBase64: png.toString("base64"),
@@ -749,6 +768,29 @@ try {
   }, { workspace });
   assert.equal(unsupportedModel.status, "failed");
   assert.equal(unsupportedModel.error.code, "ecommerce_image_model_not_supported");
+
+  const missingResolution = await tool.execute("ecommerce_image_generate", {
+    requests: [{ prompt: "缺少分辨率", size: "3:2" }]
+  }, { workspace });
+  assert.equal(missingResolution.status, "failed");
+  assert.equal(missingResolution.error.code, "ecommerce_image_invalid_resolution");
+
+  const mixedSizeContract = await tool.execute("ecommerce_image_generate", {
+    requests: [{
+      prompt: "混用尺寸合同",
+      size: { width: 1024, height: 1024 },
+      resolution: "1K"
+    }]
+  }, { workspace });
+  assert.equal(mixedSizeContract.status, "failed");
+  assert.equal(mixedSizeContract.error.code, "ecommerce_image_mixed_size_contract");
+
+  const seedreamTierContract = await tool.execute("ecommerce_image_generate", {
+    modelId: "doubao-seedream-5-0",
+    requests: [{ prompt: "Seedream 不使用档位合同", size: "1:1", resolution: "2K" }]
+  }, { workspace });
+  assert.equal(seedreamTierContract.status, "failed");
+  assert.equal(seedreamTierContract.error.code, "ecommerce_image_invalid_size");
 
   const seedreamTooSmall = await tool.execute("ecommerce_image_generate", {
     modelId: "doubao-seedream-5-0",

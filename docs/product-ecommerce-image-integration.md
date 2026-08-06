@@ -2,7 +2,7 @@
 
 ## 版本
 
-- `@xuanzhen-tech/agent-tool-brick@0.10.0`
+- `@xuanzhen-tech/agent-tool-brick@0.11.0`
 - `@xuanzhen-tech/agent-skill-brick@0.8.2`
 - `agent-llm-gateway@0.3.0`，由服务端部署，不是 Product npm 依赖
 
@@ -45,7 +45,7 @@ AgentTool 继续使用既有 Server Tool Gateway 地址：
 AGENT_TOOL_GATEWAY_BASE_URL=http://47.109.82.99/agent-llm-gateway
 ```
 
-API易 key、base URL、模型和 provider 超时只由 Gateway 服务端配置。Product 不增加 provider key、base URL、模型前缀或 Gateway token 表单。
+EWO/API易 key、base URL、模型和 provider 超时只由 Gateway 服务端配置。Product 不增加 provider key、base URL、模型前缀或 Gateway token 表单。
 
 ## GUI 与状态
 
@@ -53,6 +53,7 @@ API易 key、base URL、模型和 provider 超时只由 Gateway 服务端配置�
 
 - 单个图片任务的总预算为 390 秒，包含内部安全重试。
 - generate 可在一个 `requests` 数组中提交白底图、场景图和特写图等不同 prompt，并共享 `basePrompt` 与商品参考图。
+- GPT Image 2 的每个 request 使用独立的 `size: 1:1|3:2|2:3` 与 `resolution: 1K|2K|4K`；Product 可直接将这两个字段做成选择器。
 - 不同场景按轮询顺序进入三个全局并发槽，最多 9 张时总预算约 20 分钟。
 - 工具只向模型返回 completed、failed 或 interrupted 最终结果。
 - `deliveryReady=true` 且存在 artifact 才表示图片可交付。
