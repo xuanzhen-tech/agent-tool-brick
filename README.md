@@ -119,9 +119,9 @@ const agentTool = new AgentTool({
 });
 ```
 
-`modelId` 必须从 `gpt-image-2` 和 `doubao-seedream-5-0` 中选择，Gateway 分别路由到 API易和火山方舟；AgentTool 不接触 provider key 或带日期的内部模型名。一次 generate 通过 `requests` 提交多个场景，每个场景拥有独立 prompt、尺寸、质量和候选数量；所有场景的 `count` 合计最多 9 张。顶层 `basePrompt` 和 `referenceImages` 用于保持商品、Logo 与品牌视觉一致，每个场景还可追加自己的参考图。`count` 表示同一场景的独立候选，不是矩阵、拼图或模型分组。
+`modelId` 必须从 `gpt-image-2` 和 `doubao-seedream-5-0` 中选择，Gateway 负责真实 provider 路由；AgentTool 不接触 provider key 或带日期的内部模型名。一次 generate 通过 `requests` 提交多个场景，每个场景拥有独立 prompt、尺寸、质量和候选数量；所有场景的 `count` 合计最多 9 张。顶层 `basePrompt` 和 `referenceImages` 用于保持商品、Logo 与品牌视觉一致，每个场景还可追加自己的参考图。`count` 表示同一场景的独立候选，不是矩阵、拼图或模型分组。
 
-Seedream 5.0 使用独立的模型级合同：总像素至少为 3,686,400，只支持 PNG/JPEG 且不接受自定义压缩率；GPT Image 2 保持原尺寸与 PNG/JPEG/WebP 合同。旧 Object/HTTP 调用省略 `modelId` 时仍兼容默认 `gpt-image-2`，但模型可见的 Tool Schema 要求显式选择，确保新任务的资产、重试和后续编辑都能追踪真实模型。
+GPT Image 2 将画面比例与分辨率档位分开：`size` 使用 `1:1 | 3:2 | 2:3`，`resolution` 使用 `1K | 2K | 4K`，九种组合均可选。Gateway 会把同一公共合同分别转换成 EWO 的比例/档位参数或 API易的精确尺寸。Seedream 5.0 不参与本次合同，仍使用精确 `{ width, height }`，总像素至少为 3,686,400，只支持 PNG/JPEG 且不接受自定义压缩率。旧 Object/HTTP 的 GPT Image 2 精确尺寸调用继续兼容。
 
 ```js
 const submitted = await agentTool.execute("ecommerce_image_generate", {
@@ -135,13 +135,15 @@ const submitted = await agentTool.execute("ecommerce_image_generate", {
   requests: [{
     key: "white-background",
     prompt: "生成纯白底商品主图",
-    size: { width: 2048, height: 2048 },
+    size: "1:1",
+    resolution: "2K",
     quality: "high",
     count: 1
   }, {
     key: "lifestyle",
     prompt: "生成现代厨房使用场景图",
-    size: { width: 2048, height: 2048 },
+    size: "3:2",
+    resolution: "4K",
     quality: "high",
     count: 2
   }],

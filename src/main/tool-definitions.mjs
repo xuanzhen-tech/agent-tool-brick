@@ -532,19 +532,28 @@ export const IMAGE_PRESENT_TOOL = {
 };
 
 const ECOMMERCE_IMAGE_SIZE_SCHEMA = {
-  type: "object",
-  additionalProperties: false,
-  required: ["width", "height"],
-  properties: {
-    width: {
-      type: "integer",
-      description: "精确输出宽度，必须为 16 的倍数。Seedream 5.0 的宽高乘积至少为 3686400。"
+  oneOf: [
+    {
+      type: "string",
+      enum: ["1:1", "3:2", "2:3"]
     },
-    height: {
-      type: "integer",
-      description: "精确输出高度，必须为 16 的倍数。全部模型单边不超过 3840、比例不超过 3:1。"
+    {
+      type: "object",
+      additionalProperties: false,
+      required: ["width", "height"],
+      properties: {
+        width: { type: "integer" },
+        height: { type: "integer" }
+      }
     }
-  }
+  ],
+  description: "GPT Image 2 使用 1:1、3:2 或 2:3，并同时传 resolution。Seedream 5.0 继续使用精确 width/height。"
+};
+
+const ECOMMERCE_IMAGE_RESOLUTION_SCHEMA = {
+  type: "string",
+  enum: ["1K", "2K", "4K"],
+  description: "仅 GPT Image 2 使用。与比例 size 独立选择；没有用户偏好时使用 1K。"
 };
 
 const ECOMMERCE_IMAGE_OUTPUT_SCHEMA = {
@@ -641,6 +650,7 @@ export const ECOMMERCE_IMAGE_GENERATE_TOOL = {
                   description: "该场景生成的独立候选数量，默认 1。"
                 },
                 size: ECOMMERCE_IMAGE_SIZE_SCHEMA,
+                resolution: ECOMMERCE_IMAGE_RESOLUTION_SCHEMA,
                 quality: {
                   type: "string",
                   enum: ["auto", "low", "medium", "high"],
@@ -697,6 +707,7 @@ export const ECOMMERCE_IMAGE_EDIT_TOOL = {
                 versionId: { type: "string", description: "明确的来源版本，例如 v1；允许基于历史版本编辑。" },
                 prompt: { type: "string", description: "只描述本次需要修改的内容以及必须保持的内容。" },
                 size: ECOMMERCE_IMAGE_SIZE_SCHEMA,
+                resolution: ECOMMERCE_IMAGE_RESOLUTION_SCHEMA,
                 quality: { type: "string", enum: ["auto", "low", "medium", "high"], description: "默认 auto。" },
                 additionalReferenceImages: {
                   type: "array",
