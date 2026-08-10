@@ -43,6 +43,11 @@ export async function postServerToolGatewayMultipart(config, path, input, signal
 
   const form = new FormData();
   form.set("request", JSON.stringify(input?.request ?? {}));
+  if (input?.trace && Object.keys(input.trace).length > 0) {
+    // trace 独立于严格的 provider request 合同。旧 Gateway 会忽略该字段，
+    // 新 Gateway 则用它把图片请求关联到 thread/turn/tool call。
+    form.set("trace", JSON.stringify(input.trace));
+  }
   for (const image of input?.images ?? []) {
     form.append(
       "image",

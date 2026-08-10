@@ -120,14 +120,18 @@ export class AgentTool {
     if (!toolName) return blockedResult("tool_name_required", "工具名称不能为空。 ");
 
     const registry = await this.getRegistry();
+    const toolCallId = context.toolCallId ?? context.tool_call_id ?? `call-${crypto.randomUUID()}`;
     return await registry.execute({
       schemaVersion: TOOL_CALL_SCHEMA_VERSION,
-      toolCallId: context.toolCallId ?? context.tool_call_id ?? `call-${crypto.randomUUID()}`,
+      toolCallId,
       toolName,
       arguments: parseToolArguments(args),
       workspace: {
         root: context.workspace ?? context.workingDirectory ?? this.workspace ?? this.config.workspaceRoot
       },
+      // 只透传关联一次 Agent 运行所需的标识，不把完整 request、prompt 或 env
+      // 带入工具调用，避免 trace 能力扩大敏感数据边界。
+      traceContext: createTraceContext(context, toolCallId),
       limits: {
         timeoutMs: context.timeoutMs,
         maxOutputChars: context.maxOutputChars
@@ -192,6 +196,28 @@ export class AgentTool {
     }
     return await this.registryPromise;
   }
+}
+
+function createTraceContext(context, toolCallId) {
+  const metadata = context.request?.metadata;
+  return compactObject({
+    traceId: normalizeTraceIdentifier(context.traceId),
+    threadId: normalizeTraceIdentifier(context.threadId),
+    turnId: normalizeTraceIdentifier(context.turnId),
+    requestId: normalizeTraceIdentifier(context.requestId),
+    toolCallId: normalizeTraceIdentifier(toolCallId),
+    deviceId: normalizeTraceIdentifier(context.deviceId ?? metadata?.deviceId)
+  });
+}
+
+function normalizeTraceIdentifier(value) {
+  if (typeof value !== "string") return undefined;
+  const normalized = value.trim();
+  return normalized && normalized.length <= 256 ? normalized : undefined;
+}
+
+function compactObject(value) {
+  return Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined));
 }
 
 function normalizeConstructorInput(input) {

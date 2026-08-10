@@ -42,12 +42,14 @@ globalThis.fetch = async (url, init) => {
     const form = init?.body;
     assert.ok(form instanceof FormData);
     const request = JSON.parse(String(form.get("request")));
+    const trace = form.get("trace") ? JSON.parse(String(form.get("trace"))) : undefined;
     providerStarts.push({ prompt: request.prompt, startedAt: Date.now() });
     // 保持请求重叠，避免快速 Windows 调度让并发上限断言偶发只观察到 2。
     await delay(request.prompt.includes("SLOW") ? 2_000 : 80, init?.signal);
     providerRequests.push({
       url: String(url),
       request,
+      trace,
       images: form.getAll("image").length
     });
     if (request.prompt.includes("TRANSIENT") && transientFailures < 2) {
@@ -188,7 +190,15 @@ try {
       resolution: "1K",
       quality: "high"
     }]
-  }, { workspace });
+  }, {
+    workspace,
+    traceId: "trace-ecommerce-smoke",
+    threadId: "thread-ecommerce-smoke",
+    turnId: "turn-ecommerce-smoke",
+    requestId: "request-ecommerce-smoke",
+    toolCallId: "call-ecommerce-smoke",
+    deviceId: "device-ecommerce-smoke"
+  });
   assert.equal(generated.status, "completed");
   assert.equal(generated.details.status, "completed");
   assert.equal(generated.details.operationStatus, "completed");
@@ -227,6 +237,19 @@ try {
   assert.equal(completed.artifacts.length, 4);
   assert.equal(new Set(completed.details.items.map((item) => item.assetId)).size, 4);
   assert.equal(maxActiveRequests, 3);
+  const tracedRequests = providerRequests.filter((entry) => entry.trace?.traceId === "trace-ecommerce-smoke");
+  assert.equal(tracedRequests.length, 4);
+  for (const entry of tracedRequests) {
+    assert.equal(entry.trace.threadId, "thread-ecommerce-smoke");
+    assert.equal(entry.trace.turnId, "turn-ecommerce-smoke");
+    assert.equal(entry.trace.requestId, "request-ecommerce-smoke");
+    assert.equal(entry.trace.toolCallId, "call-ecommerce-smoke");
+    assert.equal(entry.trace.deviceId, "device-ecommerce-smoke");
+    assert.equal(entry.trace.operationId, generated.details.operationId);
+    assert.match(entry.trace.itemId, /^item-/);
+    assert.equal(entry.trace.attempt, 1);
+    assert.ok(["white-background", "lifestyle", "detail"].includes(entry.trace.requestKey));
+  }
   assert.deepEqual(
     providerStarts.slice(initialStarts, initialStarts + 4).map((entry) => {
       if (entry.prompt.includes("白底商品主图")) return "white-background";
@@ -645,6 +668,7 @@ try {
     imageTimeoutMs: 320,
     batchSettleMs: 20,
     fetchImage: async (_config, _endpoint, input, signal) => {
+      batchTimeoutStarts.push(input.request.prompt);
       await delay(220, signal);
       return {
         modelId: input.request.modelId,
@@ -654,6 +678,7 @@ try {
       };
     }
   });
+  const batchTimeoutStarts = [];
   const blockerPromise = batchTimeoutRuntime.generate(runtimeCall({
     toolCallId: "call-batch-timeout-blocker",
     workspace,
@@ -663,7 +688,12 @@ try {
       count: 3
     }
   }));
-  await delay(20);
+  // 固定 sleep 不能证明三个 worker 已经占满；必须观察到三个前置请求真实开始，
+  // 否则慢速 CI 或新版 Node 调度会让目标任务提前获得并发槽，测试结论失真。
+  await waitForCondition(
+    () => batchTimeoutStarts.filter((prompt) => prompt === "占用并发槽").length === 3,
+    "等待前置图片请求占满三个并发槽"
+  );
   const timedOutBatch = await batchTimeoutRuntime.generate(runtimeCall({
     toolCallId: "call-batch-timeout-target",
     workspace,
@@ -1013,6 +1043,15 @@ async function waitForBatchByPrompt(workspaceRoot, prompt, timeoutMs = 2_000) {
     await delay(10);
   }
   throw new Error(`等待图片批次落盘超时：${prompt}`);
+}
+
+async function waitForCondition(predicate, message, timeoutMs = 2_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await delay(10);
+  }
+  throw new Error(`${message}超时。`);
 }
 
 async function pathExists(filePath) {

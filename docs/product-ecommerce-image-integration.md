@@ -2,7 +2,7 @@
 
 ## 版本
 
-- `@xuanzhen-tech/agent-tool-brick@0.11.1`
+- `@xuanzhen-tech/agent-tool-brick@0.11.2`
 - `@xuanzhen-tech/agent-skill-brick@0.8.2`
 - `agent-llm-gateway@0.3.0`，由服务端部署，不是 Product npm 依赖
 

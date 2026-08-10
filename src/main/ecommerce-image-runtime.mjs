@@ -122,6 +122,7 @@ export class EcommerceImageRuntime {
         basePrompt: input.basePrompt,
         requests: input.requests.map(publicGenerateRequest),
         output: input.output,
+        traceContext: normalizeTraceContext(call.traceContext),
         ...identity,
         items: []
       };
@@ -147,6 +148,7 @@ export class EcommerceImageRuntime {
             resolution: request.resolution,
             quality: request.quality,
             output: input.output,
+            traceContext: normalizeTraceContext(call.traceContext),
             references: request.references,
             assetId,
             versionId: "v1",
@@ -181,6 +183,7 @@ export class EcommerceImageRuntime {
         createdAt: nowIso(),
         updatedAt: nowIso(),
         output: input.output,
+        traceContext: normalizeTraceContext(call.traceContext),
         ...identity,
         items: []
       };
@@ -205,6 +208,7 @@ export class EcommerceImageRuntime {
             resolution: edit.resolution,
             quality: edit.quality,
             output: input.output,
+            traceContext: normalizeTraceContext(call.traceContext),
             references: edit.references,
             sourcePath: sourceVersion.path,
             assetId: edit.assetId,
@@ -383,7 +387,7 @@ export class EcommerceImageRuntime {
         (timeoutSignal) => retryTransient(async () => {
           item.attempts += 1;
           await this.#persistItem(entry.workspace, entry.batchId, item);
-          return await this.#requestImage(entry.workspace, item, timeoutSignal);
+          return await this.#requestImage(entry.workspace, entry.batchId, item, timeoutSignal);
         }, timeoutSignal),
         this.imageTimeoutMs,
         controller.signal
@@ -428,7 +432,7 @@ export class EcommerceImageRuntime {
     }
   }
 
-  async #requestImage(workspace, item, signal) {
+  async #requestImage(workspace, batchId, item, signal) {
     const images = [];
     if (item.kind === "edit") {
       images.push(await readStoredImage(workspace, item.sourcePath));
@@ -452,7 +456,20 @@ export class EcommerceImageRuntime {
     const endpoint = item.kind === "edit" || images.length > 0
       ? "/api/tools/ecommerce/images/edit"
       : "/api/tools/ecommerce/images/generate";
-    return await this.fetchImage(this.config, endpoint, { request, images }, signal);
+    return await this.fetchImage(this.config, endpoint, {
+      request,
+      images,
+      trace: compactObject({
+        ...normalizeTraceContext(item.traceContext),
+        operationId: batchId,
+        itemId: item.itemId,
+        requestKey: item.requestKey,
+        requestIndex: item.requestIndex ?? item.editIndex,
+        outputIndex: item.outputIndex,
+        attempt: item.attempts,
+        operation: item.kind === "edit" ? "ecommerce_image_edit" : "ecommerce_image_generate"
+      })
+    }, signal);
   }
 
   async #persistItem(workspace, batchId, currentItem) {
@@ -1908,6 +1925,28 @@ function normalizeIdempotencyKey(value) {
     throw invalidInput("ecommerce_image_invalid_tool_call_id", "生图工具需要有效的 toolCallId 作为幂等键。");
   }
   return key;
+}
+
+function normalizeTraceContext(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  return compactObject({
+    traceId: normalizeTraceValue(value.traceId),
+    threadId: normalizeTraceValue(value.threadId),
+    turnId: normalizeTraceValue(value.turnId),
+    requestId: normalizeTraceValue(value.requestId),
+    toolCallId: normalizeTraceValue(value.toolCallId),
+    deviceId: normalizeTraceValue(value.deviceId)
+  });
+}
+
+function normalizeTraceValue(value) {
+  if (typeof value !== "string") return undefined;
+  const normalized = value.trim();
+  return normalized && normalized.length <= 256 ? normalized : undefined;
+}
+
+function compactObject(value) {
+  return Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined));
 }
 
 function normalizeInteger(value, field, minimum, maximum) {
