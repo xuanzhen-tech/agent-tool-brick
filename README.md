@@ -196,6 +196,11 @@ await agentTool.execute("skill_find", {
 });
 ```
 
+远端安装失败时，AgentTool 会保留 AgentSkill 的稳定 `skill_*` 错误码，例如
+`skill_package_invalid`、`skill_install_failed` 和 `skill_install_ambiguous`；具体
+原因同时位于 `content`、`details.failure.message` 与 `error.message`。未知的注入
+运行时异常仍统一为 `tool_execution_failed`。
+
 搜索结果里的 `skills` 是已安装 skill，`candidates` 是远端候选。完整 `SKILL.md` 内容只会在后续 `skill_activate` 中通过 `loadedSkill` payload 返回。
 
 ## Skill 资源工具

@@ -60,6 +60,11 @@ const injectedSkillRuntime = {
   definitions: [{ name: "brief-writer", description: "Write brief replies." }],
   async find(filter) {
     if (filter.query === "runtime-error") throw new Error("Injected skill runtime failed.");
+    if (filter.query === "invalid-package") {
+      const error = new Error("Invalid skill package: unsupported root entry.");
+      error.code = "skill_package_invalid";
+      throw error;
+    }
     return {
       skills: [{
         name: "brief-writer",
@@ -494,6 +499,18 @@ const failedSkillRuntime = await registry.execute({
 });
 assert.equal(failedSkillRuntime.status, "failed");
 assert.equal(failedSkillRuntime.error.code, "tool_execution_failed");
+
+const invalidSkillPackage = await registry.execute({
+  schemaVersion: "agent-cli-tool.call.v1",
+  toolCallId: "call-invalid-skill-package",
+  toolName: "skill_find",
+  arguments: { query: "invalid-package" },
+  workspace: { root: workspace }
+});
+assert.equal(invalidSkillPackage.status, "failed");
+assert.equal(invalidSkillPackage.error.code, "skill_package_invalid");
+assert.match(invalidSkillPackage.error.message, /unsupported root entry/);
+assert.equal(invalidSkillPackage.details.failure.code, "skill_package_invalid");
 
 const objectTool = new AgentTool({
   workspace,

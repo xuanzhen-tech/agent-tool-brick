@@ -264,7 +264,10 @@ function createExecutionFailureResult(call, signal, error) {
   const status = interrupted ? "interrupted" : "failed";
   const code = interrupted
     ? "interrupted"
-    : typeof error?.code === "string" && error.code.startsWith("ecommerce_image_")
+    : typeof error?.code === "string" && (
+      error.code.startsWith("ecommerce_image_")
+      || /^skill_[a-z0-9_]+$/.test(error.code)
+    )
       ? error.code
       : "tool_execution_failed";
   return {
