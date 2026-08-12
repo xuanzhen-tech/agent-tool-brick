@@ -31,6 +31,8 @@ import {
   SKILL_ACTIVATE_TOOL,
   SKILL_FIND_TOOL,
   SKILL_RESOURCE_TOOL,
+  TOOL_RESULT_READ_TOOL,
+  TOOL_RESULT_SEARCH_TOOL,
   VISUALIZATION_CREATE_CHART_TOOL,
   VISUALIZATION_CREATE_DASHBOARD_TOOL,
   WEB_FETCH_TOOL,
@@ -46,6 +48,7 @@ import {
   resolveProviderToolDescriptors
 } from "./tool-provider.mjs";
 import { createToolRegistry } from "./tool-registry.mjs";
+import { createToolResultStore } from "./tool-result-store.mjs";
 import { isWebProviderAvailable } from "./web-runtime.mjs";
 
 const TOOL_CALL_SCHEMA_VERSION = "agent-cli-tool.call.v1";
@@ -57,6 +60,8 @@ const BUILTIN_TOOL_NAMES = new Set([
   SKILL_FIND_TOOL.name,
   SKILL_ACTIVATE_TOOL.name,
   SKILL_RESOURCE_TOOL.name,
+  TOOL_RESULT_READ_TOOL.name,
+  TOOL_RESULT_SEARCH_TOOL.name,
   WEB_SEARCH_TOOL.name,
   WEB_FETCH_TOOL.name,
   EMAIL_SEND_TOOL.name,
@@ -91,6 +96,7 @@ export class AgentTool {
     });
     this.terminalManager = createTerminalSessionManager(this.config);
     this.ecommerceImageRuntime = createEcommerceImageRuntime(this.config);
+    this.resultStore = createToolResultStore();
     this.registryPromise = undefined;
   }
 
@@ -184,6 +190,16 @@ export class AgentTool {
     }));
   }
 
+  /**
+   * 删除 thread 时同步清理该 thread 的外置工具结果。
+   *
+   * AgentCli 会以尽力而为方式调用本接口；即使清理失败，也不能改变 thread
+   * 删除本身的语义。结果存储仍有保留期与磁盘上限作为最终兜底。
+   */
+  async deleteThreadResults(threadId) {
+    await this.resultStore.deleteThread(threadId);
+  }
+
   async getRegistry() {
     if (!this.registryPromise) {
       this.registryPromise = createToolRegistry(this.config, {
@@ -191,7 +207,8 @@ export class AgentTool {
         ecommerceImageRuntime: this.ecommerceImageRuntime,
         skillRuntime: this.skillRuntime,
         selectedTools: this.selectedTools,
-        providerEntries: this.toolProviders
+        providerEntries: this.toolProviders,
+        resultStore: this.resultStore
       });
     }
     return await this.registryPromise;
@@ -238,6 +255,10 @@ function selectModelToolSchemas({ config, runtimeDependencies, skillRuntime, ter
       tools.push(tool);
     }
   };
+
+  // 恢复工具是超长 Tool Result 合同的一部分，不属于产品选择的业务工具。
+  // 无论产品白名单包含哪些工具，模型都必须能够读取已经返回的 resultId。
+  tools.push(TOOL_RESULT_READ_TOOL, TOOL_RESULT_SEARCH_TOOL);
 
   if (config.processExecEnabled !== false) {
     add(RUN_SHELL_TOOL);

@@ -20,7 +20,7 @@ const tool = new AgentTool({
 try {
   assert.deepEqual(
     tool.definitions.map((item) => item.function?.name).sort(),
-    ["visualization_create_chart", "visualization_create_dashboard"].sort()
+    ["tool_result_read", "tool_result_search", "visualization_create_chart", "visualization_create_dashboard"].sort()
   );
 
   const chart = await tool.execute("visualization_create_chart", {

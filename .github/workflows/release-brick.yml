@@ -65,6 +65,7 @@ jobs:
           node --check src/main/tool-definitions.mjs
           node --check src/main/tool-provider.mjs
           node --check src/main/tool-registry.mjs
+          node --check src/main/tool-result-store.mjs
           node --check src/main/vega-runtime.mjs
           node --check src/main/vendor/vega-6.3.0.cjs
           node --check src/main/vendor/vega-lite-6.4.3.cjs
@@ -84,6 +85,7 @@ jobs:
           node --check src/scripts/smoke-agent-cli-gateway-deepseek-ecommerce-image.mjs
           node --check src/scripts/smoke-server.mjs
           node --check src/scripts/smoke-tools.mjs
+          node --check src/scripts/smoke-tool-results.mjs
           node --check src/scripts/smoke-visualizations.mjs
           node --check src/scripts/verify.mjs
 
@@ -92,6 +94,7 @@ jobs:
           npm run smoke:cli
           npm run smoke:contract
           npm run smoke:tools
+          npm run smoke:tool-results
           npm run smoke:ecommerce-images
           npm run smoke:visualizations
           npm run smoke:server

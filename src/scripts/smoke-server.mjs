@@ -291,7 +291,10 @@ try {
   const providerServer = await providerRuntime.listen();
   try {
     const providerManifest = await getJson(`${providerServer.url}/api/tools/manifest`);
-    assert.deepEqual(providerManifest.tools.map((tool) => tool.name), ["provider_echo"]);
+    assert.deepEqual(
+      providerManifest.tools.map((tool) => tool.name).sort(),
+      ["provider_echo", "tool_result_read", "tool_result_search"].sort()
+    );
     const providerResult = await postJson(`${providerServer.url}/api/tools/call`, {
       schemaVersion: "agent-cli-tool.call.v1",
       toolCallId: "server-provider-call",

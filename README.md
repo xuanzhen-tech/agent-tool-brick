@@ -281,7 +281,7 @@ AGENT_TOOL_RESULT_COMPRESSION
 
 `AGENT_TOOL_GATEWAY_BASE_URL` 是可选覆盖项。默认指向固定 Server Tool Gateway；Tavily 和 SMTP 配置必须放在服务器环境变量中，不放在产品仓库或客户端环境变量中。
 
-工具结果压缩默认启用。只有调试原始工具输出时才应设置 `AGENT_TOOL_RESULT_COMPRESSION=off`。
+工具结果压缩默认启用。超过预算的完整结果不会直接丢弃：AgentTool 将其保存到 `~/.agent-cli/tool-results/<threadId>/`，并向模型返回 `resultId`。模型可用自动暴露的 `tool_result_read` 查看结构和分页读取，也可用 `tool_result_search` 搜索必要证据。恢复范围绑定原 thread，默认保留 7 天；删除 thread 时同步清理。只有调试原始工具输出时才应设置 `AGENT_TOOL_RESULT_COMPRESSION=off`。
 
 ## 五件套验收
 
@@ -289,6 +289,13 @@ AGENT_TOOL_RESULT_COMPRESSION
 
 ```bash
 npm run smoke:five-brick-integration
+```
+
+超长 MCP 风格结果的压缩、落盘与恢复测试：
+
+```bash
+npm run smoke:tool-results
+npm run smoke:agent-cli-tool-result-recovery
 ```
 
 真实 Kimi provider 验收：

@@ -135,6 +135,7 @@ const okResult = await registry.execute({
   limits: { timeoutMs: 5_000, maxOutputChars: 8_000 }
 });
 assert.equal(okResult.status, "completed");
+assert.equal(okResult.deliveryStatus, undefined);
 assert.match(okResult.content, /\[agent-tool-result-compressed\]/);
 assert.equal(okResult.details.__agentToolCompression.policy, "run_shell");
 assert.match(okResult.details.stdout, /agent-tool-ok/);

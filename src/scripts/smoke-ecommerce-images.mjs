@@ -124,7 +124,7 @@ try {
   newOnlyTool = new AgentTool({ workspace, tools: MODEL_TOOL_NAMES });
   assert.deepEqual(
     newOnlyTool.definitions.map((definition) => definition.function.name).sort(),
-    [...MODEL_TOOL_NAMES].sort()
+    [...MODEL_TOOL_NAMES, "tool_result_read", "tool_result_search"].sort()
   );
   await newOnlyTool.dispose();
   newOnlyTool = undefined;
@@ -132,7 +132,7 @@ try {
   tool = new AgentTool({ workspace, tools: SELECTED_TOOL_NAMES });
   assert.deepEqual(
     tool.definitions.map((definition) => definition.function.name).sort(),
-    [...MODEL_TOOL_NAMES].sort()
+    [...MODEL_TOOL_NAMES, "tool_result_read", "tool_result_search"].sort()
   );
   const schemas = new Map(tool.definitions.map((definition) => [definition.function.name, definition.function]));
   assert.match(schemas.get("ecommerce_image_generate").description, /deliveryReady=true/);
@@ -372,7 +372,10 @@ try {
   const serverAddress = await toolServer.listen();
   const manifestResponse = await originalFetch(`${serverAddress.url}/api/tools/manifest`);
   const manifest = await manifestResponse.json();
-  assert.deepEqual(manifest.tools.map((entry) => entry.name).sort(), [...SELECTED_TOOL_NAMES].sort());
+  assert.deepEqual(
+    manifest.tools.map((entry) => entry.name).sort(),
+    [...SELECTED_TOOL_NAMES, "tool_result_read", "tool_result_search"].sort()
+  );
   const httpStatusResponse = await originalFetch(`${serverAddress.url}/api/tools/call`, {
     method: "POST",
     headers: { "content-type": "application/json" },

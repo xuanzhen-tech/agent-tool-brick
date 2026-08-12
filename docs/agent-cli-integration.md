@@ -48,6 +48,15 @@ GET /api/tools/manifest
 
 `agent-tool` 返回前会压缩面向模型的工具结果。响应保留稳定的 status、error、diagnostics、artifacts 和 metadata；大体量 `content` / `details` 会被摘要为 hash、长度、head/tail 和关键路径。`agent-cli` 应把返回的 `content` 当作回填给模型的工具内容。
 
+当压缩确实省略了原始结果时，AgentTool 会把完整结果外置到 `~/.agent-cli/tool-results/<threadId>/`，摘要额外返回 `resultRef`、`availablePaths` 和 `nextAction`。模型使用始终可见的基础设施工具按需恢复：
+
+- `tool_result_read`：省略 `path` 时只查看结构；提供 JSON Pointer 后读取具体字段，数组和文本支持分页。
+- `tool_result_search`：在完整结果中搜索字段名或值，只返回有限命中路径。
+
+恢复结果只能由产生它的同一 thread 读取，默认保留 7 天，并受 2GB 总磁盘上限保护。删除 thread 时，AgentCli 会通知 AgentTool 清理对应结果。产品不应直接读取 store 文件，也不应把 `resultId` 当成本地路径。
+
+产品的 `tools` 白名单不需要显式加入这两个工具。它们属于 Tool Result 合同基础设施，只要使用 AgentTool 就会自动出现在模型 definitions 中。
+
 ## Shell 生命周期
 
 shell 工具按生命周期拆分：

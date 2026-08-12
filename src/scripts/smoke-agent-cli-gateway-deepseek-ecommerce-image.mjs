@@ -45,7 +45,7 @@ try {
   agentTool = new AgentTool({ workspace, tools: selectedTools });
   assert.deepEqual(
     agentTool.definitions.map((definition) => definition.function.name).sort(),
-    [...selectedTools].sort()
+    [...selectedTools, "tool_result_read", "tool_result_search"].sort()
   );
 
   agent = new AgentCli({

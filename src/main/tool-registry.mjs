@@ -22,6 +22,8 @@ import {
   SKILL_ACTIVATE_TOOL,
   SKILL_FIND_TOOL,
   SKILL_RESOURCE_TOOL,
+  TOOL_RESULT_READ_TOOL,
+  TOOL_RESULT_SEARCH_TOOL,
   VISUALIZATION_CREATE_CHART_TOOL,
   VISUALIZATION_CREATE_DASHBOARD_TOOL,
   WEB_FETCH_TOOL,
@@ -36,6 +38,7 @@ import { executeWorkspaceSearch, isRgAvailable } from "./search-runtime.mjs";
 import { executeSkillResource } from "./skill-resource-runtime.mjs";
 import { createTerminalSessionManager } from "./terminal-runtime.mjs";
 import { compressToolExecutionResult } from "./tool-result-compression.mjs";
+import { createToolResultStore } from "./tool-result-store.mjs";
 import { executeWebFetch, executeWebSearch, isWebProviderAvailable } from "./web-runtime.mjs";
 import { executeVisualizationCreateChart, executeVisualizationCreateDashboard } from "./visualization-runtime.mjs";
 import {
@@ -54,6 +57,8 @@ const BUILTIN_TOOL_NAMES = new Set([
   SKILL_FIND_TOOL.name,
   SKILL_ACTIVATE_TOOL.name,
   SKILL_RESOURCE_TOOL.name,
+  TOOL_RESULT_READ_TOOL.name,
+  TOOL_RESULT_SEARCH_TOOL.name,
   WEB_SEARCH_TOOL.name,
   WEB_FETCH_TOOL.name,
   EMAIL_SEND_TOOL.name,
@@ -69,6 +74,10 @@ const BUILTIN_TOOL_NAMES = new Set([
   VISUALIZATION_CREATE_DASHBOARD_TOOL.name
 ]);
 
+// AgentCli 当前默认在 24K 字符执行最终上下文保护。即使 AgentTool 自身的通用
+// 压缩阈值更宽，超过该值的原文也要先建立恢复引用，避免在 CLI 层才不可逆截断。
+const RECOVERABLE_RESULT_THRESHOLD_CHARS = 24_000;
+
 export async function createToolRegistry(config, options = {}) {
   const rgAvailability = await isRgAvailable(config.rgBin);
   const skillRuntime = normalizeSkillRuntime(options.skillRuntime);
@@ -79,6 +88,7 @@ export async function createToolRegistry(config, options = {}) {
   const terminalManager = options.terminalManager ?? createTerminalSessionManager(config);
   const selectedTools = normalizeSelectedTools(options.selectedTools);
   const providerEntries = options.providerEntries ?? normalizeToolProviders(options.toolProviders);
+  const resultStore = options.resultStore ?? createToolResultStore();
   const tools = [];
   const executors = new Map();
 
@@ -88,6 +98,17 @@ export async function createToolRegistry(config, options = {}) {
     tools.push(tool);
     executors.set(tool.name, executor);
   };
+
+  // 恢复工具属于 AgentTool 的上下文基础设施，不受产品业务工具白名单影响。
+  // 否则产品只选择 MCP 工具时，模型拿到 resultId 后反而没有读取入口。
+  const addInfrastructureTool = (tool, executor) => {
+    if (executors.has(tool.name)) throw new Error(`重复的工具名称: ${tool.name}`);
+    tools.push(tool);
+    executors.set(tool.name, executor);
+  };
+
+  addInfrastructureTool(TOOL_RESULT_READ_TOOL, (call, _currentConfig, signal) => executeToolResultRead(call, resultStore, signal));
+  addInfrastructureTool(TOOL_RESULT_SEARCH_TOOL, (call, _currentConfig, signal) => executeToolResultSearch(call, resultStore, signal));
 
   if (config.processExecEnabled !== false) {
     addTool(RUN_SHELL_TOOL, executeRunShell);
@@ -185,12 +206,35 @@ export async function createToolRegistry(config, options = {}) {
       } catch (error) {
         execution = createExecutionFailureResult(call, signal, error);
       }
-      return compressToolExecutionResult({
+      const compressed = compressToolExecutionResult({
         toolName: call.toolName,
         toolCallId: call.toolCallId,
         result: execution,
         compressionEnabled: config.resultCompressionEnabled
-      }).result;
+      });
+      const originalChars = safeJson(execution)?.length ?? String(execution ?? "").length;
+      const compressionExceededBudget = compressed.changed && [
+        compressed.metadata?.originalContentChars,
+        compressed.metadata?.originalDetailsChars,
+        compressed.metadata?.originalResultChars
+      ].some((chars) => Number(chars) > Number(compressed.metadata?.budgetChars));
+      const shouldPersist = compressionExceededBudget || (
+        originalChars > RECOVERABLE_RESULT_THRESHOLD_CHARS &&
+        compressed.metadata?.reason !== "promoted_skill_context"
+      );
+      if (!shouldPersist || isToolResultRecoveryTool(call.toolName)) return compressed.result;
+
+      try {
+        const persisted = await resultStore.persist({
+          threadId: call.traceContext?.threadId ?? context.threadId,
+          toolCallId: call.toolCallId,
+          toolName: call.toolName,
+          result: execution
+        });
+        return attachRecoverableResult(compressed.result, persisted);
+      } catch (error) {
+        return attachPersistenceFailure(compressed.result, error);
+      }
     }
   };
 
@@ -211,6 +255,137 @@ export async function createToolRegistry(config, options = {}) {
         return availability.available && isToolRequested(descriptor.name, selectedTools, descriptor.defaultVisible);
       });
   }
+}
+
+async function executeToolResultRead(call, resultStore, signal) {
+  const args = call.arguments ?? {};
+  const value = await resultStore.read({
+    resultId: args.resultId,
+    threadId: call.traceContext?.threadId,
+    path: args.path,
+    offset: args.offset,
+    limit: args.limit,
+    maxChars: args.maxChars,
+    signal
+  });
+  return completedRecoveryResult("read", value);
+}
+
+async function executeToolResultSearch(call, resultStore, signal) {
+  const args = call.arguments ?? {};
+  const value = await resultStore.search({
+    resultId: args.resultId,
+    threadId: call.traceContext?.threadId,
+    query: args.query,
+    maxMatches: args.maxMatches,
+    signal
+  });
+  return completedRecoveryResult("search", value);
+}
+
+function completedRecoveryResult(action, value) {
+  const content = {
+    action,
+    ...value
+  };
+  return {
+    status: "completed",
+    // 恢复页正文只出现一次，避免 content/details 重复后再次触发 CLI 限流。
+    content: JSON.stringify(content),
+    details: pruneRecoveryDetails(content)
+  };
+}
+
+function pruneRecoveryDetails(value) {
+  return Object.fromEntries([
+    "action",
+    "resultRef",
+    "path",
+    "valueType",
+    "offset",
+    "limit",
+    "total",
+    "nextOffset",
+    "oversizedItemPath",
+    "query",
+    "matchCount",
+    "truncated",
+    "guidance"
+  ].filter((key) => value[key] !== undefined).map((key) => [key, value[key]]));
+}
+
+function attachRecoverableResult(result, persisted) {
+  const guidance = "完整工具结果已外置保存。不要猜测被省略的数据，也不要一次读取全部结果；先用 tool_result_read 查看结构，再按 path 分页读取，或用 tool_result_search 定位关键词。";
+  const nextAction = {
+    tool: TOOL_RESULT_READ_TOOL.name,
+    arguments: { resultId: persisted.resultRef.resultId }
+  };
+  const recovery = {
+    resultRef: persisted.resultRef,
+    availablePaths: persisted.availablePaths,
+    nextAction,
+    guidance
+  };
+  return {
+    ...result,
+    deliveryStatus: "recoverable_summary",
+    recoverable: true,
+    ...recovery,
+    content: appendRecoveryToContent(result?.content, recovery),
+    details: isRecord(result?.details)
+      ? { ...result.details, __toolResultRecovery: recovery }
+      : { value: result?.details, __toolResultRecovery: recovery }
+  };
+}
+
+function attachPersistenceFailure(result, error) {
+  const message = `完整工具结果超过上下文预算，但持久化失败：${error instanceof Error ? error.message : String(error)}。当前只有摘要可用，不得假设被省略内容。`;
+  return {
+    ...result,
+    deliveryStatus: "degraded",
+    recoverable: false,
+    content: appendText(result?.content, message),
+    details: isRecord(result?.details)
+      ? { ...result.details, deliveryStatus: "degraded", recoverable: false, persistenceError: message }
+      : { value: result?.details, deliveryStatus: "degraded", recoverable: false, persistenceError: message }
+  };
+}
+
+function appendRecoveryToContent(content, recovery) {
+  const parsed = parseJsonRecord(content);
+  if (parsed) return JSON.stringify({ ...parsed, recovery }, null, 2);
+  return appendText(content, JSON.stringify({ recovery }, null, 2));
+}
+
+function appendText(content, suffix) {
+  const prefix = typeof content === "string" ? content.trimEnd() : JSON.stringify(content ?? {}, null, 2);
+  return prefix ? `${prefix}\n\n${suffix}` : suffix;
+}
+
+function parseJsonRecord(value) {
+  if (typeof value !== "string") return undefined;
+  try {
+    const parsed = JSON.parse(value);
+    return isRecord(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function safeJson(value) {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return undefined;
+  }
+}
+
+function isRecord(value) {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function isToolResultRecoveryTool(name) {
+  return name === TOOL_RESULT_READ_TOOL.name || name === TOOL_RESULT_SEARCH_TOOL.name;
 }
 
 function normalizeSkillRuntime(value) {
@@ -264,7 +439,9 @@ function createExecutionFailureResult(call, signal, error) {
   const status = interrupted ? "interrupted" : "failed";
   const code = interrupted
     ? "interrupted"
-    : typeof error?.code === "string" && error.code.startsWith("ecommerce_image_")
+    : typeof error?.code === "string" && (
+      error.code.startsWith("ecommerce_image_") || error.code.startsWith("tool_result_")
+    )
       ? error.code
       : "tool_execution_failed";
   return {

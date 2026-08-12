@@ -35,7 +35,7 @@ import { createToolResult } from "../main/tool-contract.mjs";
 
 assert.equal(brickDefinition.id, "agent-tool");
 assert.equal(brickDefinition.kind, "tool");
-assert.equal(brickDefinition.version, "0.11.2");
+assert.equal(brickDefinition.version, "0.12.0");
 assert.equal(validateBrickDefinition(brickDefinition).ok, true);
 assert.equal(brickDefinition.runtimeDependencies.some((item) => item.type === "node-runtime" && item.required === true), true);
 assert.equal(brickDefinition.runtimeDependencies.some((item) => item.slot === "tool:rg" && item.required === false), true);
@@ -111,6 +111,8 @@ assert.equal(agentTool.definitions.some((tool) => tool.function?.name === "works
 assert.equal(agentTool.definitions.some((tool) => tool.function?.name === "skill_find"), true);
 assert.equal(agentTool.definitions.some((tool) => tool.function?.name === "skill_activate"), true);
 assert.equal(agentTool.definitions.some((tool) => tool.function?.name === "skill_resource"), false);
+assert.equal(agentTool.definitions.some((tool) => tool.function?.name === "tool_result_read"), true);
+assert.equal(agentTool.definitions.some((tool) => tool.function?.name === "tool_result_search"), true);
 assert.equal(agentTool.definitions.some((tool) => tool.function?.name === "visualization_create_chart"), false);
 assert.equal(agentTool.definitions.some((tool) => tool.function?.name === "visualization_create_dashboard"), false);
 assert.equal((await agentTool.execute("skill_find", JSON.stringify({ query: "demo" }))).details.skills[0].name, "demo");
@@ -123,7 +125,7 @@ const selectedTool = new AgentTool({
 });
 assert.deepEqual(
   selectedTool.definitions.map((tool) => tool.function?.name).sort(),
-  ["run_shell", "visualization_create_chart", "visualization_create_dashboard"].sort()
+  ["run_shell", "tool_result_read", "tool_result_search", "visualization_create_chart", "visualization_create_dashboard"].sort()
 );
 await selectedTool.dispose();
 

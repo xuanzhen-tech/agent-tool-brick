@@ -99,6 +99,91 @@ export const RUN_SHELL_TOOL = {
   cancelable: true
 };
 
+export const TOOL_RESULT_READ_TOOL = {
+  name: "tool_result_read",
+  description: "读取此前因超长而被外置保存的完整工具结果。只能在产生结果的同一 thread 中使用；应先查看结构，再按 JSON Pointer 和分页读取必要字段，禁止尝试一次加载全部数据。",
+  schema: {
+    type: "function",
+    function: {
+      name: "tool_result_read",
+      description: "按结构、JSON Pointer 或分页读取超长工具结果。省略 path 时只返回字段索引；数组按 offset/limit 分页，文本按 offset/maxChars 分页。",
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          resultId: {
+            type: "string",
+            description: "超长工具结果摘要返回的 resultId。"
+          },
+          path: {
+            type: "string",
+            description: "可选 JSON Pointer，例如 /data/price；省略时只查看结构。"
+          },
+          offset: {
+            type: "integer",
+            minimum: 0,
+            description: "数组元素或文本字符的起始偏移，默认 0。"
+          },
+          limit: {
+            type: "integer",
+            minimum: 1,
+            maximum: 100,
+            description: "数组单页元素数量，默认 20，最大 100。"
+          },
+          maxChars: {
+            type: "integer",
+            minimum: 1,
+            maximum: 12000,
+            description: "文本单页最大字符数，默认 8000，最大 12000。"
+          }
+        },
+        required: ["resultId"]
+      }
+    }
+  },
+  permissions: ["tool-result.read"],
+  timeoutMs: 20_000,
+  cancelable: true,
+  defaultVisible: true
+};
+
+export const TOOL_RESULT_SEARCH_TOOL = {
+  name: "tool_result_search",
+  description: "在此前外置保存的超长工具结果中搜索关键词，只返回有限命中和路径。它用于定位必要数据，不会返回完整结果。",
+  schema: {
+    type: "function",
+    function: {
+      name: "tool_result_search",
+      description: "在同一 thread 的超长工具结果中搜索字段名或值，并返回可供 tool_result_read 继续读取的 JSON Pointer。",
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          resultId: {
+            type: "string",
+            description: "超长工具结果摘要返回的 resultId。"
+          },
+          query: {
+            type: "string",
+            description: "需要定位的字段名、标识符或文本关键词。"
+          },
+          maxMatches: {
+            type: "integer",
+            minimum: 1,
+            maximum: 50,
+            description: "最大命中数量，默认 20，最大 50。"
+          }
+        },
+        required: ["resultId", "query"]
+      }
+    }
+  },
+  permissions: ["tool-result.read"],
+  timeoutMs: 20_000,
+  cancelable: true,
+  defaultVisible: true
+};
+
 export const EXEC_COMMAND_TOOL = {
   name: "exec_command",
   description: [
