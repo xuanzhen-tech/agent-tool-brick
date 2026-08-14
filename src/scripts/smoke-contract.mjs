@@ -29,6 +29,7 @@ import {
   RUN_SHELL_TOOL,
   SKILL_CREATE_TOOL,
   SKILL_FIND_TOOL,
+  SKILL_REMOVE_TOOL,
   SKILL_RESOURCE_TOOL,
   WRITE_STDIN_TOOL
 } from "../main/tool-definitions.mjs";
@@ -36,7 +37,7 @@ import { createToolResult } from "../main/tool-contract.mjs";
 
 assert.equal(brickDefinition.id, "agent-tool");
 assert.equal(brickDefinition.kind, "tool");
-assert.equal(brickDefinition.version, "0.13.0");
+assert.equal(brickDefinition.version, "0.14.0");
 assert.equal(validateBrickDefinition(brickDefinition).ok, true);
 assert.equal(brickDefinition.runtimeDependencies.some((item) => item.type === "node-runtime" && item.required === true), true);
 assert.equal(brickDefinition.runtimeDependencies.some((item) => item.slot === "tool:rg" && item.required === false), true);
@@ -111,6 +112,7 @@ assert.equal(agentTool.definitions.some((tool) => tool.function?.name === "write
 assert.equal(agentTool.definitions.some((tool) => tool.function?.name === "workspace_search"), true);
 assert.equal(agentTool.definitions.some((tool) => tool.function?.name === "skill_find"), true);
 assert.equal(agentTool.definitions.some((tool) => tool.function?.name === "skill_create"), false);
+assert.equal(agentTool.definitions.some((tool) => tool.function?.name === "skill_remove"), false);
 assert.equal(agentTool.definitions.some((tool) => tool.function?.name === "skill_activate"), true);
 assert.equal(agentTool.definitions.some((tool) => tool.function?.name === "skill_resource"), false);
 assert.equal(agentTool.definitions.some((tool) => tool.function?.name === "tool_result_read"), true);
@@ -137,6 +139,23 @@ assert.deepEqual(
   ["skill_create", "tool_result_read", "tool_result_search"].sort()
 );
 await selectedSkillCreateTool.dispose();
+
+// 删除工具同样要求产品显式选择，并且注入对象必须真正实现 remove()。
+const selectedSkillRemoveTool = new AgentTool({
+  workspace: process.cwd(),
+  tools: ["skill_remove"],
+  skillRuntime: {
+    definitions: [{ name: "demo" }],
+    find: async () => ({ skills: [] }),
+    activate: async () => ({ loadedSkill: undefined }),
+    remove: async () => ({ removed: true, name: "demo" })
+  }
+});
+assert.deepEqual(
+  selectedSkillRemoveTool.definitions.map((tool) => tool.function?.name).sort(),
+  ["skill_remove", "tool_result_read", "tool_result_search"].sort()
+);
+await selectedSkillRemoveTool.dispose();
 
 // 新增预制工具必须由产品显式选择，不能改变既有 new AgentTool() 的模型工具面。
 const selectedTool = new AgentTool({
@@ -248,6 +267,10 @@ assert.deepEqual(SKILL_CREATE_TOOL.schema.function.parameters.required, ["name",
 assert.equal(SKILL_CREATE_TOOL.schema.function.parameters.additionalProperties, false);
 assert.equal(SKILL_CREATE_TOOL.defaultVisible, false);
 assert.deepEqual(SKILL_CREATE_TOOL.schema.function.parameters.properties.conflict.enum, ["check", "replace"]);
+assert.deepEqual(SKILL_REMOVE_TOOL.schema.function.parameters.required, ["skill", "confirm"]);
+assert.equal(SKILL_REMOVE_TOOL.schema.function.parameters.additionalProperties, false);
+assert.equal(SKILL_REMOVE_TOOL.defaultVisible, false);
+assert.deepEqual(SKILL_REMOVE_TOOL.schema.function.parameters.properties.confirm.enum, [true]);
 assert.deepEqual(SKILL_RESOURCE_TOOL.schema.function.parameters.required, ["action", "skill", "path"]);
 assert.equal(SKILL_RESOURCE_TOOL.schema.function.parameters.additionalProperties, false);
 assert.deepEqual(SKILL_RESOURCE_TOOL.schema.function.parameters.properties.action.enum, ["read_reference", "copy_asset"]);

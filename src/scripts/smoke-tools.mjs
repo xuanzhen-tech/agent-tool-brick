@@ -48,6 +48,8 @@ const referenceHash = crypto.createHash("sha256").update(referenceContent).diges
 const assetHash = crypto.createHash("sha256").update(assetContent).digest("hex");
 let createdSkillPackage;
 let createdSkillInstallStatus = "installed";
+let removedSkill;
+let injectedSkillDefinitions = [{ name: "brief-writer", description: "Write brief replies." }];
 const config = {
   ...resolveServiceConfig(process.env, {
     workspaceRoot: workspace,
@@ -60,7 +62,12 @@ const config = {
 };
 const injectedSkillRuntime = {
   config: { skillsPath: path.join(workspace, "managed-skills") },
-  definitions: [{ name: "brief-writer", description: "Write brief replies." }],
+  get definitions() {
+    return injectedSkillDefinitions;
+  },
+  async refresh() {
+    return { skills: injectedSkillDefinitions };
+  },
   async find(filter) {
     if (filter.query === "runtime-error") throw new Error("Injected skill runtime failed.");
     return {
@@ -122,6 +129,15 @@ const injectedSkillRuntime = {
       name: "created-review-skill",
       path: path.join(workspace, "managed-skills", "created-review-skill"),
       installation: { skillName: "created-review-skill" }
+    };
+  },
+  async remove(skill, options) {
+    removedSkill = { skill, options };
+    injectedSkillDefinitions = injectedSkillDefinitions.filter((item) => item.name !== skill);
+    return {
+      removed: true,
+      name: skill,
+      installation: { skillName: skill, sourceKind: "local" }
     };
   }
 };
@@ -571,6 +587,50 @@ const rejectedDestination = await registry.execute({
 });
 assert.equal(rejectedDestination.status, "failed");
 assert.match(rejectedDestination.error.message, /destination path is not supported/);
+
+// skill_remove 与创建能力一样默认隐藏。显式选择后也只能删除当前索引中存在的
+// 精确名称，并要求用户确认；未知名称不能落到 AgentSkill.remove()。
+assert.equal(registry.has("skill_remove"), false);
+const removeRegistry = await createToolRegistry(config, {
+  skillRuntime: injectedSkillRuntime,
+  selectedTools: ["skill_remove"]
+});
+const unconfirmedRemoval = await removeRegistry.execute({
+  schemaVersion: "agent-cli-tool.call.v1",
+  toolCallId: "call-skill-remove-unconfirmed",
+  toolName: "skill_remove",
+  arguments: { skill: "brief-writer", confirm: false },
+  workspace: { root: workspace }
+});
+assert.equal(unconfirmedRemoval.status, "failed");
+assert.match(unconfirmedRemoval.error.message, /confirm=true/);
+assert.equal(removedSkill, undefined);
+
+const unknownRemoval = await removeRegistry.execute({
+  schemaVersion: "agent-cli-tool.call.v1",
+  toolCallId: "call-skill-remove-unknown",
+  toolName: "skill_remove",
+  arguments: { skill: "unknown-skill", confirm: true },
+  workspace: { root: workspace }
+});
+assert.equal(unknownRemoval.status, "failed");
+assert.match(unknownRemoval.error.message, /currently indexed skill/);
+assert.equal(removedSkill, undefined);
+
+const removed = await removeRegistry.execute({
+  schemaVersion: "agent-cli-tool.call.v1",
+  toolCallId: "call-skill-remove",
+  toolName: "skill_remove",
+  arguments: { skill: "brief-writer", confirm: true, reason: "用户明确要求删除" },
+  workspace: { root: workspace }
+});
+assert.equal(removed.status, "completed");
+assert.equal(removed.details.removed, true);
+assert.equal(removed.details.skillName, "brief-writer");
+assert.equal(removed.details.installationRemoved, true);
+assert.equal(removedSkill.skill, "brief-writer");
+assert.equal(removedSkill.options.reason, "用户明确要求删除");
+assert.equal(injectedSkillDefinitions.some((item) => item.name === "brief-writer"), false);
 
 // 注入的 AgentSkill 运行时异常也必须被 registry 转成可恢复 tool result。
 const failedSkillRuntime = await registry.execute({

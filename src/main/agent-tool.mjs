@@ -31,6 +31,7 @@ import {
   SKILL_ACTIVATE_TOOL,
   SKILL_CREATE_TOOL,
   SKILL_FIND_TOOL,
+  SKILL_REMOVE_TOOL,
   SKILL_RESOURCE_TOOL,
   TOOL_RESULT_READ_TOOL,
   TOOL_RESULT_SEARCH_TOOL,
@@ -60,6 +61,7 @@ const BUILTIN_TOOL_NAMES = new Set([
   WORKSPACE_SEARCH_TOOL.name,
   SKILL_FIND_TOOL.name,
   SKILL_CREATE_TOOL.name,
+  SKILL_REMOVE_TOOL.name,
   SKILL_ACTIVATE_TOOL.name,
   SKILL_RESOURCE_TOOL.name,
   TOOL_RESULT_READ_TOOL.name,
@@ -271,6 +273,7 @@ function selectModelToolSchemas({ config, runtimeDependencies, skillRuntime, ter
   if (skillRuntime) {
     add(SKILL_FIND_TOOL);
     add(SKILL_CREATE_TOOL, typeof skillRuntime.install === "function");
+    add(SKILL_REMOVE_TOOL, typeof skillRuntime.remove === "function");
     add(SKILL_ACTIVATE_TOOL);
     add(SKILL_RESOURCE_TOOL, hasSkillResourceApi(skillRuntime));
   }

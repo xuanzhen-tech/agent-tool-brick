@@ -22,6 +22,7 @@ import {
   SKILL_ACTIVATE_TOOL,
   SKILL_CREATE_TOOL,
   SKILL_FIND_TOOL,
+  SKILL_REMOVE_TOOL,
   SKILL_RESOURCE_TOOL,
   TOOL_RESULT_READ_TOOL,
   TOOL_RESULT_SEARCH_TOOL,
@@ -38,6 +39,7 @@ import { executeRunShell } from "./shell-runtime.mjs";
 import { executeWorkspaceSearch, isRgAvailable } from "./search-runtime.mjs";
 import { executeSkillResource } from "./skill-resource-runtime.mjs";
 import { executeSkillCreate } from "./skill-create-runtime.mjs";
+import { executeSkillRemove } from "./skill-remove-runtime.mjs";
 import { createTerminalSessionManager } from "./terminal-runtime.mjs";
 import { compressToolExecutionResult } from "./tool-result-compression.mjs";
 import { createToolResultStore } from "./tool-result-store.mjs";
@@ -58,6 +60,7 @@ const BUILTIN_TOOL_NAMES = new Set([
   WORKSPACE_SEARCH_TOOL.name,
   SKILL_FIND_TOOL.name,
   SKILL_CREATE_TOOL.name,
+  SKILL_REMOVE_TOOL.name,
   SKILL_ACTIVATE_TOOL.name,
   SKILL_RESOURCE_TOOL.name,
   TOOL_RESULT_READ_TOOL.name,
@@ -129,6 +132,9 @@ export async function createToolRegistry(config, options = {}) {
     addTool(SKILL_FIND_TOOL, (call, _currentConfig, signal) => executeInjectedSkillFind(call, skillRuntime, signal));
     if (typeof skillRuntime.install === "function") {
       addTool(SKILL_CREATE_TOOL, (call, _currentConfig, signal) => executeInjectedSkillCreate(call, skillRuntime, signal));
+    }
+    if (typeof skillRuntime.remove === "function") {
+      addTool(SKILL_REMOVE_TOOL, (call, _currentConfig, signal) => executeInjectedSkillRemove(call, skillRuntime, signal));
     }
     addTool(SKILL_ACTIVATE_TOOL, (call, _currentConfig, signal) => executeInjectedSkillActivate(call, skillRuntime, signal));
     if (hasSkillResourceApi(skillRuntime)) {
@@ -407,6 +413,11 @@ async function executeInjectedSkillFind(call, skillRuntime, signal) {
 
 async function executeInjectedSkillCreate(call, skillRuntime, signal) {
   const result = await executeSkillCreate(skillRuntime, call, signal);
+  return completedSkillResult(result);
+}
+
+async function executeInjectedSkillRemove(call, skillRuntime, signal) {
+  const result = await executeSkillRemove(skillRuntime, call, signal);
   return completedSkillResult(result);
 }
 

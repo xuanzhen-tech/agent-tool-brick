@@ -19,7 +19,7 @@
 - 一次性命令工具 `run_shell`
 - 持续终端会话工具 `exec_command` 和 `write_stdin`
 - 通过注入的 `rg` runtime 暴露可选 `workspace_search`
-- 通过注入的 `AgentSkill` 对象暴露可选 `skill_find`、`skill_activate`、`skill_resource`，以及显式选择后可用的 `skill_create`
+- 通过注入的 `AgentSkill` 对象暴露可选 `skill_find`、`skill_activate`、`skill_resource`，以及显式选择后可用的 `skill_create`、`skill_remove`
 - 通过服务端 Tool Gateway 暴露 `web_search` 和 `web_fetch`
 - 通过服务端 Tool Gateway 暴露 `email_send`
 - 本地呈递 `image_present` 图片 artifact；视觉模型直接接收原生图片内容
@@ -90,7 +90,7 @@ const agent = new AgentCli({
 });
 ```
 
-`agentTool.definitions` 返回面向模型的 OpenAI-compatible tool schemas。`agentTool.execute(name, args, context)` 执行指定工具，并把持续终端会话保存在当前 `AgentTool` 实例内。注入完整 `AgentSkill` 对象后，`skill_find`、`skill_activate` 和 `skill_resource` 会暴露给模型；它们分别委托该对象完成本地/远端 skill 查找、激活，以及 skill 包资源的受控访问。`skill_create` 默认隐藏，产品显式加入工具白名单后才允许模型创建或更新 Skill。
+`agentTool.definitions` 返回面向模型的 OpenAI-compatible tool schemas。`agentTool.execute(name, args, context)` 执行指定工具，并把持续终端会话保存在当前 `AgentTool` 实例内。注入完整 `AgentSkill` 对象后，`skill_find`、`skill_activate` 和 `skill_resource` 会暴露给模型；它们分别委托该对象完成本地/远端 skill 查找、激活，以及 skill 包资源的受控访问。`skill_create` 和 `skill_remove` 默认隐藏，产品显式加入工具白名单后才允许模型创建、更新或删除 Skill。
 
 默认构造 `new AgentTool()` 保持既有工具集合。产品需要启用新增预制工具或复杂 Provider 时，
 显式传 `tools` 白名单；列表以外的工具不会进入模型 schema：
@@ -207,7 +207,7 @@ await agentTool.execute("skill_find", {
 const agentTool = new AgentTool({
   workspace,
   skillRuntime: agentSkill,
-  tools: ["skill_find", "skill_create", "skill_activate", "skill_resource"]
+  tools: ["skill_find", "skill_create", "skill_remove", "skill_activate", "skill_resource"]
 });
 ```
 
@@ -233,6 +233,24 @@ await agentTool.execute("skill_create", {
 自定义的 `skillsPath`、选择代理、事务安装、冲突保护和索引刷新仍是唯一事实来源。
 `sourcePath` 必须是 workspace 内的相对路径，且只允许复制到 `assets/`。同名 Skill
 默认返回冲突；只有用户明确授权更新或覆盖时才使用 `conflict: "replace"`。
+
+### 删除 Skill
+
+`skill_remove` 只接受当前 `AgentSkill` 索引中的精确 id 或 name，不接受目录路径。产品
+必须显式把它加入工具白名单；模型也必须在用户明确提出删除后传入 `confirm: true`：
+
+```js
+await agentTool.execute("skill_remove", {
+  skill: "marketplace-review-analysis",
+  confirm: true,
+  reason: "用户不再需要该能力"
+});
+```
+
+实际删除由注入对象的 `AgentSkill.remove()` 完成，包括受管目录、安装记录、索引刷新
+和当前实例选择更新。工具不会调用 shell，也不会根据猜测路径删除文件。产品配置若仍
+显式选择同名预制 Skill，下次创建 `AgentSkill` 时它可能重新安装；需要永久取消该
+产品选择时，产品还应同步更新自己的 Skill 白名单。
 
 ## Skill 资源工具
 
@@ -313,7 +331,7 @@ AGENT_TOOL_RESULT_COMPRESSION
 
 `PLAYWRIGHT_BROWSERS_PATH` 来自可选的 `playwright-browsers` runtime dependency。配置后，Node 子进程可以使用该路径下的 Chromium 缓存；Playwright JS library 本身仍由产品仓库依赖提供。
 
-`skill_find`、`skill_activate`、`skill_resource` 和 `skill_create` 只由注入的 `AgentSkill` 实例提供。独立执行 `agent-tool serve` 时没有该对象，因此不会暴露这些工具；产品需要 HTTP transport 时应通过 `agentTool.createServer()` 启动，以复用同一个 `AgentSkill` 和终端会话。`skill_create` 还要求该对象实现公开的 `install()`，并且始终需要产品在 `tools` 中显式选择。
+`skill_find`、`skill_activate`、`skill_resource`、`skill_create` 和 `skill_remove` 只由注入的 `AgentSkill` 实例提供。独立执行 `agent-tool serve` 时没有该对象，因此不会暴露这些工具；产品需要 HTTP transport 时应通过 `agentTool.createServer()` 启动，以复用同一个 `AgentSkill` 和终端会话。`skill_create` 要求该对象实现公开的 `install()`，`skill_remove` 要求实现 `remove()`；二者始终需要产品在 `tools` 中显式选择。
 
 `AGENT_TOOL_GATEWAY_BASE_URL` 是可选覆盖项。默认指向固定 Server Tool Gateway；Tavily 和 SMTP 配置必须放在服务器环境变量中，不放在产品仓库或客户端环境变量中。
 

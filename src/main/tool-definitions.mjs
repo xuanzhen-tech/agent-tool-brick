@@ -476,6 +476,42 @@ export const SKILL_CREATE_TOOL = {
   cancelable: true
 };
 
+export const SKILL_REMOVE_TOOL = {
+  name: "skill_remove",
+  description: "删除当前 AgentSkill 索引中已登记的受管 Skill。只接受 Skill 名称，不接受路径；必须由用户明确要求并传 confirm=true。",
+  defaultVisible: false,
+  schema: {
+    type: "function",
+    function: {
+      name: "skill_remove",
+      description: "通过注入的 AgentSkill.remove() 删除一个已登记 Skill，并清理安装记录和当前实例选择。不得用它删除未知路径或猜测名称。若产品仍在白名单中选择同名预制 Skill，产品下次启动时可能重新安装。",
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        required: ["skill", "confirm"],
+        properties: {
+          skill: {
+            type: "string",
+            description: "要删除的精确 Skill id 或 name，必须来自 skill_find 或当前可用 Skill 摘要。"
+          },
+          confirm: {
+            type: "boolean",
+            enum: [true],
+            description: "仅当用户明确要求删除该 Skill 时传 true。"
+          },
+          reason: {
+            type: "string",
+            description: "可选的单行删除原因，用于结果说明，不参与路径解析。"
+          }
+        }
+      }
+    }
+  },
+  permissions: ["skill.remove", "filesystem.write"],
+  timeoutMs: 30_000,
+  cancelable: true
+};
+
 export const SKILL_ACTIVATE_TOOL = {
   name: "skill_activate",
   description: "激活已安装 skill 的 SKILL.md，并返回资源清单；不会读取 references 或复制 assets。",
