@@ -19,7 +19,7 @@
 - 一次性命令工具 `run_shell`
 - 持续终端会话工具 `exec_command` 和 `write_stdin`
 - 通过注入的 `rg` runtime 暴露可选 `workspace_search`
-- 通过注入的 `AgentSkill` 对象暴露可选 `skill_find`、`skill_activate` 和 `skill_resource`
+- 通过注入的 `AgentSkill` 对象暴露可选 `skill_find`、`skill_activate`、`skill_resource`，以及显式选择后可用的 `skill_create`
 - 通过服务端 Tool Gateway 暴露 `web_search` 和 `web_fetch`
 - 通过服务端 Tool Gateway 暴露 `email_send`
 - 本地呈递 `image_present` 图片 artifact；视觉模型直接接收原生图片内容
@@ -90,7 +90,7 @@ const agent = new AgentCli({
 });
 ```
 
-`agentTool.definitions` 返回面向模型的 OpenAI-compatible tool schemas。`agentTool.execute(name, args, context)` 执行指定工具，并把持续终端会话保存在当前 `AgentTool` 实例内。注入完整 `AgentSkill` 对象后，`skill_find`、`skill_activate` 和 `skill_resource` 会暴露给模型；它们分别委托该对象完成本地/远端 skill 查找、激活，以及 skill 包资源的受控访问。
+`agentTool.definitions` 返回面向模型的 OpenAI-compatible tool schemas。`agentTool.execute(name, args, context)` 执行指定工具，并把持续终端会话保存在当前 `AgentTool` 实例内。注入完整 `AgentSkill` 对象后，`skill_find`、`skill_activate` 和 `skill_resource` 会暴露给模型；它们分别委托该对象完成本地/远端 skill 查找、激活，以及 skill 包资源的受控访问。`skill_create` 默认隐藏，产品显式加入工具白名单后才允许模型创建或更新 Skill。
 
 默认构造 `new AgentTool()` 保持既有工具集合。产品需要启用新增预制工具或复杂 Provider 时，
 显式传 `tools` 白名单；列表以外的工具不会进入模型 schema：
@@ -198,6 +198,42 @@ await agentTool.execute("skill_find", {
 
 搜索结果里的 `skills` 是已安装 skill，`candidates` 是远端候选。完整 `SKILL.md` 内容只会在后续 `skill_activate` 中通过 `loadedSkill` payload 返回。
 
+### 创建 Skill
+
+需要让 Agent 沉淀新能力时，产品显式选择 `skill_create`，并继续注入同一个
+`AgentSkill` 对象：
+
+```js
+const agentTool = new AgentTool({
+  workspace,
+  skillRuntime: agentSkill,
+  tools: ["skill_find", "skill_create", "skill_activate", "skill_resource"]
+});
+```
+
+```js
+await agentTool.execute("skill_create", {
+  name: "marketplace-review-analysis",
+  description: "分析电商评论主题和改进机会。适用于用户要求整理评论或比较竞品口碑时。",
+  instructions: "# Review Analysis\n\n1. 确认站点和样本范围。\n2. 保留原始证据。",
+  requiredTools: ["workspace_search"],
+  files: [{
+    path: "references/field-contract.md",
+    content: "# 字段口径\n\n..."
+  }, {
+    path: "assets/report-template.xlsx",
+    sourcePath: "uploads/report-template.xlsx"
+  }],
+  conflict: "check"
+}, { workspace });
+```
+
+`skill_create` 不直接写固定的 `~/.agent-cli/skills`，也不读写产品选择状态。
+它在系统临时目录组装包，然后调用当前注入对象的 `AgentSkill.install()`；因此产品
+自定义的 `skillsPath`、选择代理、事务安装、冲突保护和索引刷新仍是唯一事实来源。
+`sourcePath` 必须是 workspace 内的相对路径，且只允许复制到 `assets/`。同名 Skill
+默认返回冲突；只有用户明确授权更新或覆盖时才使用 `conflict: "replace"`。
+
 ## Skill 资源工具
 
 `skill_activate` 只会加载 `SKILL.md`，同时返回 `references/` 与 `assets/` 的轻量清单；
@@ -277,7 +313,7 @@ AGENT_TOOL_RESULT_COMPRESSION
 
 `PLAYWRIGHT_BROWSERS_PATH` 来自可选的 `playwright-browsers` runtime dependency。配置后，Node 子进程可以使用该路径下的 Chromium 缓存；Playwright JS library 本身仍由产品仓库依赖提供。
 
-`skill_find`、`skill_activate` 和 `skill_resource` 只由注入的 `AgentSkill` 实例提供。独立执行 `agent-tool serve` 时没有该对象，因此不会暴露这些工具；产品需要 HTTP transport 时应通过 `agentTool.createServer()` 启动，以复用同一个 `AgentSkill` 和终端会话。
+`skill_find`、`skill_activate`、`skill_resource` 和 `skill_create` 只由注入的 `AgentSkill` 实例提供。独立执行 `agent-tool serve` 时没有该对象，因此不会暴露这些工具；产品需要 HTTP transport 时应通过 `agentTool.createServer()` 启动，以复用同一个 `AgentSkill` 和终端会话。`skill_create` 还要求该对象实现公开的 `install()`，并且始终需要产品在 `tools` 中显式选择。
 
 `AGENT_TOOL_GATEWAY_BASE_URL` 是可选覆盖项。默认指向固定 Server Tool Gateway；Tavily 和 SMTP 配置必须放在服务器环境变量中，不放在产品仓库或客户端环境变量中。
 

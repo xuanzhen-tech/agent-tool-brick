@@ -29,6 +29,7 @@ import {
   IMAGE_PRESENT_TOOL,
   RUN_SHELL_TOOL,
   SKILL_ACTIVATE_TOOL,
+  SKILL_CREATE_TOOL,
   SKILL_FIND_TOOL,
   SKILL_RESOURCE_TOOL,
   TOOL_RESULT_READ_TOOL,
@@ -58,6 +59,7 @@ const BUILTIN_TOOL_NAMES = new Set([
   WRITE_STDIN_TOOL.name,
   WORKSPACE_SEARCH_TOOL.name,
   SKILL_FIND_TOOL.name,
+  SKILL_CREATE_TOOL.name,
   SKILL_ACTIVATE_TOOL.name,
   SKILL_RESOURCE_TOOL.name,
   TOOL_RESULT_READ_TOOL.name,
@@ -268,6 +270,7 @@ function selectModelToolSchemas({ config, runtimeDependencies, skillRuntime, ter
   add(WORKSPACE_SEARCH_TOOL, Boolean(config.rgBin || hasRuntimeDependency(runtimeDependencies, ["tool:rg", "rg"])));
   if (skillRuntime) {
     add(SKILL_FIND_TOOL);
+    add(SKILL_CREATE_TOOL, typeof skillRuntime.install === "function");
     add(SKILL_ACTIVATE_TOOL);
     add(SKILL_RESOURCE_TOOL, hasSkillResourceApi(skillRuntime));
   }

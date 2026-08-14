@@ -393,6 +393,89 @@ export const SKILL_FIND_TOOL = {
   cancelable: true
 };
 
+export const SKILL_CREATE_TOOL = {
+  name: "skill_create",
+  description: "创建或更新一个完整 Skill 包，并通过注入的 AgentSkill 安装到当前产品管理的 Skill 目录。不得直接猜测或写入安装路径。",
+  defaultVisible: false,
+  schema: {
+    type: "function",
+    function: {
+      name: "skill_create",
+      description: "把 SKILL.md、文本 references/scripts 和 workspace 内已有 assets 组装成受控 Skill 包，再交给 AgentSkill 校验、安装和刷新。首次创建使用 conflict=check；只有用户明确同意覆盖同名 Skill 时才使用 replace。",
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        required: ["name", "description", "instructions"],
+        properties: {
+          name: {
+            type: "string",
+            description: "Skill 名称。使用小写字母、数字和连字符，最长 64 个字符，例如 marketplace-review-analysis。"
+          },
+          description: {
+            type: "string",
+            description: "触发说明：同时写清这个 Skill 做什么，以及用户在什么任务或表达下应该使用它。"
+          },
+          instructions: {
+            type: "string",
+            description: "SKILL.md 正文。只写 Agent 执行任务所需的流程、边界和资源导航，不写 README、安装指南或变更记录。"
+          },
+          version: {
+            type: "string",
+            description: "可选 Skill 版本，格式 x.y.z，默认 0.1.0。"
+          },
+          capabilities: {
+            type: "array",
+            items: { type: "string" },
+            description: "可选能力标识。"
+          },
+          requiredTools: {
+            type: "array",
+            items: { type: "string" },
+            description: "执行该 Skill 必须可见的工具名称。"
+          },
+          optionalTools: {
+            type: "array",
+            items: { type: "string" },
+            description: "可选增强工具名称。"
+          },
+          files: {
+            type: "array",
+            maxItems: 100,
+            description: "可选资源文件。path 只能位于 references/、scripts/ 或 assets/。文本文件传 content；已有二进制或模板传 workspace 相对 sourcePath，二者只能选一个。",
+            items: {
+              type: "object",
+              additionalProperties: false,
+              required: ["path"],
+              properties: {
+                path: {
+                  type: "string",
+                  description: "Skill 包内相对路径，例如 references/schema.md、scripts/check.py 或 assets/template.xlsx。"
+                },
+                content: {
+                  type: "string",
+                  description: "UTF-8 文本内容，适合 reference 或 script。"
+                },
+                sourcePath: {
+                  type: "string",
+                  description: "当前 workspace 内已有文件的相对路径，适合图片、模板等二进制 asset。"
+                }
+              }
+            }
+          },
+          conflict: {
+            type: "string",
+            enum: ["check", "replace"],
+            description: "同名冲突策略，默认 check。replace 会替换既有 Skill，只能在用户明确授权更新或覆盖时使用。"
+          }
+        }
+      }
+    }
+  },
+  permissions: ["skill.install", "workspace.read", "filesystem.write"],
+  timeoutMs: 30_000,
+  cancelable: true
+};
+
 export const SKILL_ACTIVATE_TOOL = {
   name: "skill_activate",
   description: "激活已安装 skill 的 SKILL.md，并返回资源清单；不会读取 references 或复制 assets。",

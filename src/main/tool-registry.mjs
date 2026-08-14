@@ -20,6 +20,7 @@ import {
   IMAGE_PRESENT_TOOL,
   RUN_SHELL_TOOL,
   SKILL_ACTIVATE_TOOL,
+  SKILL_CREATE_TOOL,
   SKILL_FIND_TOOL,
   SKILL_RESOURCE_TOOL,
   TOOL_RESULT_READ_TOOL,
@@ -36,6 +37,7 @@ import { executeImagePresent, isImagePresentAvailable } from "./image-runtime.mj
 import { executeRunShell } from "./shell-runtime.mjs";
 import { executeWorkspaceSearch, isRgAvailable } from "./search-runtime.mjs";
 import { executeSkillResource } from "./skill-resource-runtime.mjs";
+import { executeSkillCreate } from "./skill-create-runtime.mjs";
 import { createTerminalSessionManager } from "./terminal-runtime.mjs";
 import { compressToolExecutionResult } from "./tool-result-compression.mjs";
 import { createToolResultStore } from "./tool-result-store.mjs";
@@ -55,6 +57,7 @@ const BUILTIN_TOOL_NAMES = new Set([
   WRITE_STDIN_TOOL.name,
   WORKSPACE_SEARCH_TOOL.name,
   SKILL_FIND_TOOL.name,
+  SKILL_CREATE_TOOL.name,
   SKILL_ACTIVATE_TOOL.name,
   SKILL_RESOURCE_TOOL.name,
   TOOL_RESULT_READ_TOOL.name,
@@ -124,6 +127,9 @@ export async function createToolRegistry(config, options = {}) {
   // 显式注入该对象时才暴露 skill 工具，避免 index-only 兼容路径承诺不存在的能力。
   if (skillRuntime) {
     addTool(SKILL_FIND_TOOL, (call, _currentConfig, signal) => executeInjectedSkillFind(call, skillRuntime, signal));
+    if (typeof skillRuntime.install === "function") {
+      addTool(SKILL_CREATE_TOOL, (call, _currentConfig, signal) => executeInjectedSkillCreate(call, skillRuntime, signal));
+    }
     addTool(SKILL_ACTIVATE_TOOL, (call, _currentConfig, signal) => executeInjectedSkillActivate(call, skillRuntime, signal));
     if (hasSkillResourceApi(skillRuntime)) {
       addTool(SKILL_RESOURCE_TOOL, (call, _currentConfig, signal) => executeInjectedSkillResource(call, skillRuntime, signal));
@@ -396,6 +402,11 @@ function normalizeSkillRuntime(value) {
 
 async function executeInjectedSkillFind(call, skillRuntime, signal) {
   const result = await skillRuntime.find(call.arguments ?? {}, createSkillContext(call, signal));
+  return completedSkillResult(result);
+}
+
+async function executeInjectedSkillCreate(call, skillRuntime, signal) {
+  const result = await executeSkillCreate(skillRuntime, call, signal);
   return completedSkillResult(result);
 }
 

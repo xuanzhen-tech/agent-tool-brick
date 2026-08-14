@@ -115,7 +115,7 @@ function createSkillRuntimeCheck(skillRuntime) {
       id: "tool.skill_runtime",
       status: "pass",
       summary: supportsResources
-        ? "AgentSkill runtime is injected; skill_find, skill_activate, and skill_resource are exposed."
+        ? "AgentSkill runtime is injected; skill_find, skill_activate, and skill_resource are available; skill_create additionally requires explicit tool selection."
         : "AgentSkill runtime is injected; skill_find and skill_activate are exposed.",
       detail: `${skillRuntime.definitions?.length ?? 0} cached skills${supportsResources ? "; controlled skill resources enabled" : "; skill resources unavailable"}`
     };
@@ -123,7 +123,7 @@ function createSkillRuntimeCheck(skillRuntime) {
   return {
     id: "tool.skill_runtime",
     status: "warn",
-    summary: "AgentSkill runtime is not injected; skill_find, skill_activate, and skill_resource will not be exposed.",
+    summary: "AgentSkill runtime is not injected; skill_find, skill_create, skill_activate, and skill_resource will not be exposed.",
     detail: "Inject AgentSkill when creating AgentTool or the HTTP service."
   };
 }

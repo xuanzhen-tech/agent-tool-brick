@@ -27,6 +27,7 @@ import {
   EXEC_COMMAND_TOOL,
   IMAGE_PRESENT_TOOL,
   RUN_SHELL_TOOL,
+  SKILL_CREATE_TOOL,
   SKILL_FIND_TOOL,
   SKILL_RESOURCE_TOOL,
   WRITE_STDIN_TOOL
@@ -35,7 +36,7 @@ import { createToolResult } from "../main/tool-contract.mjs";
 
 assert.equal(brickDefinition.id, "agent-tool");
 assert.equal(brickDefinition.kind, "tool");
-assert.equal(brickDefinition.version, "0.12.0");
+assert.equal(brickDefinition.version, "0.13.0");
 assert.equal(validateBrickDefinition(brickDefinition).ok, true);
 assert.equal(brickDefinition.runtimeDependencies.some((item) => item.type === "node-runtime" && item.required === true), true);
 assert.equal(brickDefinition.runtimeDependencies.some((item) => item.slot === "tool:rg" && item.required === false), true);
@@ -109,6 +110,7 @@ assert.equal(agentTool.definitions.some((tool) => tool.function?.name === "exec_
 assert.equal(agentTool.definitions.some((tool) => tool.function?.name === "write_stdin"), false);
 assert.equal(agentTool.definitions.some((tool) => tool.function?.name === "workspace_search"), true);
 assert.equal(agentTool.definitions.some((tool) => tool.function?.name === "skill_find"), true);
+assert.equal(agentTool.definitions.some((tool) => tool.function?.name === "skill_create"), false);
 assert.equal(agentTool.definitions.some((tool) => tool.function?.name === "skill_activate"), true);
 assert.equal(agentTool.definitions.some((tool) => tool.function?.name === "skill_resource"), false);
 assert.equal(agentTool.definitions.some((tool) => tool.function?.name === "tool_result_read"), true);
@@ -117,6 +119,24 @@ assert.equal(agentTool.definitions.some((tool) => tool.function?.name === "visua
 assert.equal(agentTool.definitions.some((tool) => tool.function?.name === "visualization_create_dashboard"), false);
 assert.equal((await agentTool.execute("skill_find", JSON.stringify({ query: "demo" }))).details.skills[0].name, "demo");
 await agentTool.dispose();
+
+// skill_create 必须同时满足“产品显式选择”和“注入对象支持 install()”，不能因
+// AgentSkill 仅被注入就自动扩张模型工具面。
+const selectedSkillCreateTool = new AgentTool({
+  workspace: process.cwd(),
+  tools: ["skill_create"],
+  skillRuntime: {
+    definitions: [],
+    find: async () => ({ skills: [] }),
+    activate: async () => ({ loadedSkill: undefined }),
+    install: async () => ({ status: "installed", installed: true, name: "demo" })
+  }
+});
+assert.deepEqual(
+  selectedSkillCreateTool.definitions.map((tool) => tool.function?.name).sort(),
+  ["skill_create", "tool_result_read", "tool_result_search"].sort()
+);
+await selectedSkillCreateTool.dispose();
 
 // 新增预制工具必须由产品显式选择，不能改变既有 new AgentTool() 的模型工具面。
 const selectedTool = new AgentTool({
@@ -224,6 +244,10 @@ await playwrightAwareTool.dispose();
 assert.deepEqual(SKILL_FIND_TOOL.schema.function.parameters.properties.action.enum, ["search", "install"]);
 assert.equal(SKILL_FIND_TOOL.schema.function.parameters.properties.package.type, "string");
 assert.equal(SKILL_FIND_TOOL.timeoutMs, 300_000);
+assert.deepEqual(SKILL_CREATE_TOOL.schema.function.parameters.required, ["name", "description", "instructions"]);
+assert.equal(SKILL_CREATE_TOOL.schema.function.parameters.additionalProperties, false);
+assert.equal(SKILL_CREATE_TOOL.defaultVisible, false);
+assert.deepEqual(SKILL_CREATE_TOOL.schema.function.parameters.properties.conflict.enum, ["check", "replace"]);
 assert.deepEqual(SKILL_RESOURCE_TOOL.schema.function.parameters.required, ["action", "skill", "path"]);
 assert.equal(SKILL_RESOURCE_TOOL.schema.function.parameters.additionalProperties, false);
 assert.deepEqual(SKILL_RESOURCE_TOOL.schema.function.parameters.properties.action.enum, ["read_reference", "copy_asset"]);

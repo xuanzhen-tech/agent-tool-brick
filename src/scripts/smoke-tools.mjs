@@ -46,6 +46,8 @@ await fs.mkdir(path.dirname(assetPath), { recursive: true });
 await fs.writeFile(assetPath, assetContent, "utf8");
 const referenceHash = crypto.createHash("sha256").update(referenceContent).digest("hex");
 const assetHash = crypto.createHash("sha256").update(assetContent).digest("hex");
+let createdSkillPackage;
+let createdSkillInstallStatus = "installed";
 const config = {
   ...resolveServiceConfig(process.env, {
     workspaceRoot: workspace,
@@ -57,6 +59,7 @@ const config = {
   })
 };
 const injectedSkillRuntime = {
+  config: { skillsPath: path.join(workspace, "managed-skills") },
   definitions: [{ name: "brief-writer", description: "Write brief replies." }],
   async find(filter) {
     if (filter.query === "runtime-error") throw new Error("Injected skill runtime failed.");
@@ -106,6 +109,19 @@ const injectedSkillRuntime = {
         contentHash: assetHash,
         bytes: Buffer.byteLength(assetContent, "utf8")
       }
+    };
+  },
+  async install(source, options) {
+    const skillMarkdown = await fs.readFile(path.join(source, "SKILL.md"), "utf8");
+    const reference = await fs.readFile(path.join(source, "references", "policy.md"), "utf8");
+    const asset = await fs.readFile(path.join(source, "assets", "template.txt"), "utf8");
+    createdSkillPackage = { skillMarkdown, reference, asset, options };
+    return {
+      status: createdSkillInstallStatus,
+      installed: createdSkillInstallStatus === "installed",
+      name: "created-review-skill",
+      path: path.join(workspace, "managed-skills", "created-review-skill"),
+      installation: { skillName: "created-review-skill" }
     };
   }
 };
@@ -423,6 +439,77 @@ const skillFind = await registry.execute({
 });
 assert.equal(skillFind.status, "completed");
 assert.match(skillFind.content, /brief-writer/);
+
+// skill_create 默认不扩张历史工具面；产品显式选择后，它必须组装真实临时包并
+// 委托 AgentSkill.install()，而不是直接写入某个猜测的 managed root。
+assert.equal(registry.has("skill_create"), false);
+const createRegistry = await createToolRegistry(config, {
+  skillRuntime: injectedSkillRuntime,
+  selectedTools: ["skill_create"]
+});
+const createdSkill = await createRegistry.execute({
+  schemaVersion: "agent-cli-tool.call.v1",
+  toolCallId: "call-skill-create",
+  toolName: "skill_create",
+  arguments: {
+    name: "created-review-skill",
+    description: "分析评论；适用于用户要求提炼评论主题时。",
+    instructions: "# Review Skill\n\n读取评论并保留证据。",
+    capabilities: ["review.analysis"],
+    requiredTools: ["workspace_search"],
+    files: [
+      { path: "references/policy.md", content: "# Policy\n\n不得虚构评论。\n" },
+      { path: "assets/template.txt", sourcePath: "skills/brief-writer/assets/template.txt" }
+    ]
+  },
+  workspace: { root: workspace }
+});
+assert.equal(createdSkill.status, "completed");
+assert.equal(createdSkill.details.created, true);
+assert.equal(createdSkill.details.installation.name, "created-review-skill");
+assert.equal(createdSkill.details.managedSkillsPath, path.join(workspace, "managed-skills"));
+assert.match(createdSkillPackage.skillMarkdown, /name: created-review-skill/);
+assert.match(createdSkillPackage.skillMarkdown, /requiredTools: \[workspace_search\]/);
+assert.match(createdSkillPackage.reference, /不得虚构评论/);
+assert.equal(createdSkillPackage.asset, assetContent);
+assert.equal(createdSkillPackage.options.conflict, "check");
+
+// 相同内容已存在时，工具必须说明无需重复写入，不能把 unchanged 误报为新建成功。
+createdSkillInstallStatus = "unchanged";
+const unchangedSkill = await createRegistry.execute({
+  schemaVersion: "agent-cli-tool.call.v1",
+  toolCallId: "call-skill-create-unchanged",
+  toolName: "skill_create",
+  arguments: {
+    name: "created-review-skill",
+    description: "分析评论；适用于用户要求提炼评论主题时。",
+    instructions: "# Review Skill\n\n读取评论并保留证据。",
+    files: [
+      { path: "references/policy.md", content: "# Policy\n\n不得虚构评论。\n" },
+      { path: "assets/template.txt", sourcePath: "skills/brief-writer/assets/template.txt" }
+    ]
+  },
+  workspace: { root: workspace }
+});
+assert.equal(unchangedSkill.status, "completed");
+assert.equal(unchangedSkill.details.created, false);
+assert.match(unchangedSkill.details.guidance, /没有重复写入/);
+createdSkillInstallStatus = "installed";
+
+const rejectedSkillPath = await createRegistry.execute({
+  schemaVersion: "agent-cli-tool.call.v1",
+  toolCallId: "call-skill-create-escape",
+  toolName: "skill_create",
+  arguments: {
+    name: "unsafe-skill",
+    description: "测试非法资源路径。",
+    instructions: "不得安装。",
+    files: [{ path: "../outside.md", content: "unsafe" }]
+  },
+  workspace: { root: workspace }
+});
+assert.equal(rejectedSkillPath.status, "failed");
+assert.match(rejectedSkillPath.error.message, /safe relative path|references/);
 
 const skillActivate = await registry.execute({
   schemaVersion: "agent-cli-tool.call.v1",
