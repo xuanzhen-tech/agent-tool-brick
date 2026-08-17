@@ -16,6 +16,8 @@ import {
   ECOMMERCE_IMAGE_JOB_RETRY_TOOL,
   ECOMMERCE_IMAGE_JOB_STATUS_TOOL,
   ECOMMERCE_IMAGE_LIST_TOOL,
+  ECOMMERCE_VIDEO_GENERATE_TOOL,
+  ECOMMERCE_VIDEO_LIST_TOOL,
   EXEC_COMMAND_TOOL,
   IMAGE_PRESENT_TOOL,
   RUN_SHELL_TOOL,
@@ -76,6 +78,8 @@ const BUILTIN_TOOL_NAMES = new Set([
   ECOMMERCE_IMAGE_JOB_CANCEL_TOOL.name,
   ECOMMERCE_IMAGE_JOB_RETRY_TOOL.name,
   ECOMMERCE_IMAGE_LIST_TOOL.name,
+  ECOMMERCE_VIDEO_GENERATE_TOOL.name,
+  ECOMMERCE_VIDEO_LIST_TOOL.name,
   VISUALIZATION_CREATE_CHART_TOOL.name,
   VISUALIZATION_CREATE_DASHBOARD_TOOL.name
 ]);
@@ -91,6 +95,7 @@ export async function createToolRegistry(config, options = {}) {
   const emailAvailability = isEmailProviderAvailable(config);
   const imagePresentAvailability = isImagePresentAvailable();
   const ecommerceImageRuntime = options.ecommerceImageRuntime;
+  const ecommerceVideoRuntime = options.ecommerceVideoRuntime;
   const terminalManager = options.terminalManager ?? createTerminalSessionManager(config);
   const selectedTools = normalizeSelectedTools(options.selectedTools);
   const providerEntries = options.providerEntries ?? normalizeToolProviders(options.toolProviders);
@@ -163,6 +168,11 @@ export async function createToolRegistry(config, options = {}) {
     addTool(ECOMMERCE_IMAGE_JOB_CANCEL_TOOL, (call, _currentConfig, signal) => ecommerceImageRuntime.jobCancel({ ...call, signal }));
     addTool(ECOMMERCE_IMAGE_JOB_RETRY_TOOL, (call, _currentConfig, signal) => ecommerceImageRuntime.jobRetry({ ...call, signal }));
     addTool(ECOMMERCE_IMAGE_LIST_TOOL, (call, _currentConfig, signal) => ecommerceImageRuntime.list({ ...call, signal }));
+  }
+
+  if (ecommerceVideoRuntime) {
+    addTool(ECOMMERCE_VIDEO_GENERATE_TOOL, (call, _currentConfig, signal) => ecommerceVideoRuntime.generate({ ...call, signal }));
+    addTool(ECOMMERCE_VIDEO_LIST_TOOL, (call, _currentConfig, signal) => ecommerceVideoRuntime.list({ ...call, signal }));
   }
 
   addTool(VISUALIZATION_CREATE_CHART_TOOL, executeVisualizationCreateChart);

@@ -11,6 +11,7 @@ import { brickDefinition } from "../brick-definition.mjs";
 import crypto from "node:crypto";
 import { createDiagnosticsReport } from "./diagnostics.mjs";
 import { createEcommerceImageRuntime } from "./ecommerce-image-runtime.mjs";
+import { createEcommerceVideoRuntime } from "./ecommerce-video-runtime.mjs";
 import { isEmailProviderAvailable } from "./email-runtime.mjs";
 import { isImagePresentAvailable } from "./image-runtime.mjs";
 import { resolveServiceConfig } from "./launch-config.mjs";
@@ -25,6 +26,8 @@ import {
   ECOMMERCE_IMAGE_JOB_RETRY_TOOL,
   ECOMMERCE_IMAGE_JOB_STATUS_TOOL,
   ECOMMERCE_IMAGE_LIST_TOOL,
+  ECOMMERCE_VIDEO_GENERATE_TOOL,
+  ECOMMERCE_VIDEO_LIST_TOOL,
   EXEC_COMMAND_TOOL,
   IMAGE_PRESENT_TOOL,
   RUN_SHELL_TOOL,
@@ -76,6 +79,8 @@ const BUILTIN_TOOL_NAMES = new Set([
   ECOMMERCE_IMAGE_JOB_CANCEL_TOOL.name,
   ECOMMERCE_IMAGE_JOB_RETRY_TOOL.name,
   ECOMMERCE_IMAGE_LIST_TOOL.name,
+  ECOMMERCE_VIDEO_GENERATE_TOOL.name,
+  ECOMMERCE_VIDEO_LIST_TOOL.name,
   IMAGE_PRESENT_TOOL.name,
   VISUALIZATION_CREATE_CHART_TOOL.name,
   VISUALIZATION_CREATE_DASHBOARD_TOOL.name
@@ -100,6 +105,7 @@ export class AgentTool {
     });
     this.terminalManager = createTerminalSessionManager(this.config);
     this.ecommerceImageRuntime = createEcommerceImageRuntime(this.config);
+    this.ecommerceVideoRuntime = createEcommerceVideoRuntime(this.config);
     this.resultStore = createToolResultStore();
     this.registryPromise = undefined;
   }
@@ -120,6 +126,7 @@ export class AgentTool {
       skillRuntime: this.skillRuntime,
       terminalManager: this.terminalManager,
       ecommerceImageRuntime: this.ecommerceImageRuntime,
+      ecommerceVideoRuntime: this.ecommerceVideoRuntime,
       selectedTools: this.selectedTools,
       toolProviders: this.toolProviders
     });
@@ -179,6 +186,7 @@ export class AgentTool {
       config: input.config ?? this.config,
       terminalManager: input.terminalManager ?? this.terminalManager,
       ecommerceImageRuntime: input.ecommerceImageRuntime ?? this.ecommerceImageRuntime,
+      ecommerceVideoRuntime: input.ecommerceVideoRuntime ?? this.ecommerceVideoRuntime,
       skillRuntime: input.skillRuntime ?? this.skillRuntime,
       selectedTools: input.selectedTools ?? this.selectedTools,
       providerEntries: input.providerEntries ?? this.toolProviders,
@@ -189,6 +197,7 @@ export class AgentTool {
   async dispose() {
     this.terminalManager.closeAll("AgentTool 已释放。");
     await this.ecommerceImageRuntime.dispose();
+    await this.ecommerceVideoRuntime.dispose();
     await Promise.all(this.toolProviders.map(async ({ provider }) => {
       if (typeof provider.dispose === "function") await provider.dispose();
     }));
@@ -209,6 +218,7 @@ export class AgentTool {
       this.registryPromise = createToolRegistry(this.config, {
         terminalManager: this.terminalManager,
         ecommerceImageRuntime: this.ecommerceImageRuntime,
+        ecommerceVideoRuntime: this.ecommerceVideoRuntime,
         skillRuntime: this.skillRuntime,
         selectedTools: this.selectedTools,
         providerEntries: this.toolProviders,
@@ -252,7 +262,7 @@ function normalizeConstructorInput(input) {
   };
 }
 
-function selectModelToolSchemas({ config, runtimeDependencies, skillRuntime, terminalManager, ecommerceImageRuntime, selectedTools, toolProviders }) {
+function selectModelToolSchemas({ config, runtimeDependencies, skillRuntime, terminalManager, ecommerceImageRuntime, ecommerceVideoRuntime, selectedTools, toolProviders }) {
   const tools = [];
   const add = (tool, available = true) => {
     if (available && isToolRequested(tool.name, selectedTools, tool.defaultVisible !== false)) {
@@ -286,6 +296,8 @@ function selectModelToolSchemas({ config, runtimeDependencies, skillRuntime, ter
   add(ECOMMERCE_IMAGE_GENERATE_TOOL, Boolean(ecommerceImageRuntime));
   add(ECOMMERCE_IMAGE_EDIT_TOOL, Boolean(ecommerceImageRuntime));
   add(ECOMMERCE_IMAGE_LIST_TOOL, Boolean(ecommerceImageRuntime));
+  add(ECOMMERCE_VIDEO_GENERATE_TOOL, Boolean(ecommerceVideoRuntime));
+  add(ECOMMERCE_VIDEO_LIST_TOOL, Boolean(ecommerceVideoRuntime));
   add(VISUALIZATION_CREATE_CHART_TOOL);
   add(VISUALIZATION_CREATE_DASHBOARD_TOOL);
 

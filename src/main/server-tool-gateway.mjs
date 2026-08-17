@@ -85,6 +85,64 @@ export async function postServerToolGatewayMultipart(config, path, input, signal
   return parsed;
 }
 
+export async function requestServerToolGatewayJson(config, path, options = {}, signal) {
+  const response = await requestServerToolGateway(config, path, {
+    method: options.method ?? "GET",
+    signal
+  });
+  const parsed = await response.json().catch(() => ({}));
+  if (!response.ok || parsed?.ok === false || parsed?.error) {
+    throw createGatewayError(
+      readErrorCode(parsed) ?? "server_tool_gateway_http_error",
+      readErrorMessage(parsed) ?? `Server tool gateway returned HTTP ${response.status}.`,
+      {
+        statusCode: response.status,
+        retryable: typeof parsed?.error?.retryable === "boolean" ? parsed.error.retryable : false
+      }
+    );
+  }
+  return parsed;
+}
+
+export async function requestServerToolGatewayBinary(config, path, signal) {
+  const response = await requestServerToolGateway(config, path, { method: "GET", signal });
+  if (!response.ok) {
+    const parsed = await response.json().catch(() => ({}));
+    throw createGatewayError(
+      readErrorCode(parsed) ?? "server_tool_gateway_http_error",
+      readErrorMessage(parsed) ?? `Server tool gateway returned HTTP ${response.status}.`,
+      {
+        statusCode: response.status,
+        retryable: typeof parsed?.error?.retryable === "boolean" ? parsed.error.retryable : false
+      }
+    );
+  }
+  return {
+    bytes: Buffer.from(await response.arrayBuffer()),
+    mimeType: response.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase()
+  };
+}
+
+async function requestServerToolGateway(config, path, options) {
+  const availability = isServerToolGatewayAvailable(config);
+  if (!availability.available) {
+    throw createGatewayError("server_tool_gateway_unavailable", availability.detail, { retryable: false });
+  }
+  try {
+    return await fetch(joinUrl(config.toolGatewayBaseUrl, path), {
+      method: options.method,
+      signal: options.signal
+    });
+  } catch (error) {
+    if (options.signal?.aborted) throw error;
+    throw createGatewayError(
+      "server_tool_gateway_network_error",
+      error instanceof Error ? error.message : String(error),
+      { retryable: true }
+    );
+  }
+}
+
 function joinUrl(baseUrl, path) {
   return `${String(baseUrl).replace(/\/+$/, "")}${path.startsWith("/") ? path : `/${path}`}`;
 }

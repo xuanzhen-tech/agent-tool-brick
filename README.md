@@ -161,6 +161,25 @@ const submitted = await agentTool.execute("ecommerce_image_generate", {
 
 单个图片任务的 390 秒预算覆盖全部内部重试，Gateway 应在 360 秒内结束单次 provider 请求，生产反向代理应至少允许 420 秒。只有 Gateway 明确返回 `retryable: true` 时才会在总预算内自动重试；网络断开、超时和取消后的上游结果未知，不会自动重放。同一 `toolCallId` 的相同请求会复用已持久化任务，不会重复计费；相同 ID 携带不同参数会被拒绝。
 
+## 商品照片生视频工具
+
+首版商品视频能力固定使用 Seedance 2.0，只处理商品照片，不处理真人、数字人或人脸驱动。两个工具默认隐藏，Product 通过现有白名单选择：
+
+```js
+const agentTool = new AgentTool({
+  workspace,
+  runtimeDependencies,
+  skillRuntime: agentSkill,
+  tools: ["ecommerce_video_generate", "ecommerce_video_list"]
+});
+```
+
+`ecommerce_video_generate` 接受 workspace 相对 `imagePath`、完整导演 prompt，以及可选 `aspectRatio`、`duration`、`resolution`、`generateAudio`。默认值为 `adaptive`、6 秒、1080p、无音频；`modelId` 省略时固定为 `doubao-seedance-2-0`。AgentTool 会提交一次任务、持久化 Provider taskId、轮询、下载并验证 MP4，模型不需要保存 taskId 或自行轮询。只有 `deliveryReady=true` 且存在 `kind=video` artifact 才表示完成。
+
+任务写入 `outputs/ecommerce-videos/jobs/<jobId>/manifest.json`，结果写入同目录的 `result.mp4`。manifest 只保存 workspace 相对路径、参数、状态和哈希，不保存图片 Base64、API key 或本机绝对路径。同一 `toolCallId` 会复用已有任务，防止工具重放造成重复计费；进程重启后，已取得 Provider taskId 的未完成任务会继续查询和下载，提交结果不确定且没有 taskId 的任务不会自动重提。
+
+Product 只需要选择上述工具和 `ecommerce-product-video-generation` Skill，并按现有 artifact 方式展示 `video/mp4`。Provider 密钥、Seedance 日期版模型名、轮询和下载接口全部属于 Gateway/AgentTool 边界，Product 不需要增加相关配置。
+
 图表工具真实生成 Vega-Lite JSON、SVG、PNG 和 manifest；看板工具真实生成结构化 JSON、
 HTML、图表文件和 manifest。所有正式文件固定写到 `outputs/visualizations/`，并通过
 `agent-output.v1` 交给 `AgentCli` 与产品 GUI。图表渲染固定使用随 SDK/artifact 发布的、
