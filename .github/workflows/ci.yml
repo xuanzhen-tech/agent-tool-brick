@@ -29,16 +29,19 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.PACKAGES_READ_TOKEN }}
 
-      - name: Validate ecommerce image runtime
+      - name: Validate ecommerce media runtimes
         run: |
           node --check src/main/ecommerce-image-runtime.mjs
+          node --check src/main/ecommerce-video-runtime.mjs
           node --check src/main/server-tool-gateway.mjs
           node --check src/scripts/smoke-ecommerce-images.mjs
+          node --check src/scripts/smoke-ecommerce-videos.mjs
 
       - name: Run contract smoke tests
         run: |
           npm run smoke:contract
           npm run smoke:ecommerce-images
+          npm run smoke:ecommerce-videos
           npm run smoke:tools
 
       - name: Verify package

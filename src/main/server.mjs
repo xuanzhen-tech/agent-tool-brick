@@ -10,6 +10,7 @@ import http from "node:http";
 
 import { createDiagnosticsReport, createHealthReport } from "./diagnostics.mjs";
 import { createEcommerceImageRuntime } from "./ecommerce-image-runtime.mjs";
+import { createEcommerceVideoRuntime } from "./ecommerce-video-runtime.mjs";
 import { resolveServiceConfig } from "./launch-config.mjs";
 import { createTerminalSessionManager } from "./terminal-runtime.mjs";
 import { createToolRegistry } from "./tool-registry.mjs";
@@ -25,6 +26,9 @@ export async function createAgentToolServer(input = {}) {
   const ownsEcommerceImageRuntime = !input.ecommerceImageRuntime && typeof input.createRegistry !== "function";
   const ecommerceImageRuntime = input.ecommerceImageRuntime
     ?? (typeof input.createRegistry === "function" ? undefined : createEcommerceImageRuntime(config));
+  const ownsEcommerceVideoRuntime = !input.ecommerceVideoRuntime && typeof input.createRegistry !== "function";
+  const ecommerceVideoRuntime = input.ecommerceVideoRuntime
+    ?? (typeof input.createRegistry === "function" ? undefined : createEcommerceVideoRuntime(config));
 
   async function createRegistry() {
     // 对象模式必须复用 AgentTool 已组合好的 Provider 和工具白名单；否则 HTTP
@@ -34,6 +38,7 @@ export async function createAgentToolServer(input = {}) {
       terminalManager,
       skillRuntime,
       ecommerceImageRuntime,
+      ecommerceVideoRuntime,
       selectedTools: input.selectedTools,
       providerEntries: input.providerEntries
     });
@@ -150,6 +155,7 @@ export async function createAgentToolServer(input = {}) {
       activeCalls.clear();
       terminalManager.closeAll("Server is closing.");
       if (ownsEcommerceImageRuntime) await ecommerceImageRuntime?.dispose();
+      if (ownsEcommerceVideoRuntime) await ecommerceVideoRuntime?.dispose();
       await new Promise((resolve) => server.close(() => resolve()));
     }
   };

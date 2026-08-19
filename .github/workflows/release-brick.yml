@@ -52,6 +52,7 @@ jobs:
           node --check src/cli.mjs
           node --check src/main/diagnostics.mjs
           node --check src/main/ecommerce-image-runtime.mjs
+          node --check src/main/ecommerce-video-runtime.mjs
           node --check src/main/env.mjs
           node --check src/main/image-runtime.mjs
           node --check src/main/launch-config.mjs
@@ -78,6 +79,7 @@ jobs:
           node --check src/scripts/publish-artifact-placeholder.mjs
           node --check src/scripts/smoke-contract.mjs
           node --check src/scripts/smoke-ecommerce-images.mjs
+          node --check src/scripts/smoke-ecommerce-videos.mjs
           node --check src/scripts/smoke-agent-cli-gateway-kimi.mjs
           node --check src/scripts/smoke-agent-cli-gateway-kimi-image-present.mjs
           node --check src/scripts/smoke-agent-cli-gateway-kimi-skill.mjs
@@ -96,6 +98,7 @@ jobs:
           npm run smoke:tools
           npm run smoke:tool-results
           npm run smoke:ecommerce-images
+          npm run smoke:ecommerce-videos
           npm run smoke:visualizations
           npm run smoke:server
 

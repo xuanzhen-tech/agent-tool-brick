@@ -932,6 +932,165 @@ export const ECOMMERCE_IMAGE_EDIT_TOOL = {
   cancelable: true
 };
 
+export const ECOMMERCE_VIDEO_GENERATE_TOOL = {
+  name: "ecommerce_video_generate",
+  description: "提交一张 workspace 商品照片生成 Seedance 商品视频；可靠记录本地任务后立即返回，后台受控执行。",
+  defaultVisible: false,
+  schema: {
+    type: "function",
+    function: {
+      name: "ecommerce_video_generate",
+      description: "根据已激活的商品视频 skill 组织完整提示词，再提交一张商品照片生成视频。用户没有明确要求时使用 6 秒、1080p、adaptive、无音频。返回 queued 只表示任务已受理，不代表视频完成；只有后续状态结果 deliveryReady=true 且返回 video artifact 才能报告生成完成。",
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        required: ["imagePath", "prompt"],
+        properties: {
+          modelId: {
+            type: "string",
+            enum: ["doubao-seedance-2-0"],
+            description: "首版固定为 doubao-seedance-2-0，省略时使用该默认值。"
+          },
+          imagePath: {
+            type: "string",
+            description: "当前 workspace 内一张 PNG、JPEG 或 WebP 商品照片的相对路径。"
+          },
+          prompt: {
+            type: "string",
+            maxLength: 20000,
+            description: "完整视频导演提示词：主体锁定、镜头、动作、场景、光线、节奏、禁止项和商品真实性约束。"
+          },
+          aspectRatio: {
+            type: "string",
+            enum: ["adaptive", "16:9", "9:16", "1:1", "4:3", "3:4"],
+            description: "输出画幅，默认 adaptive。"
+          },
+          duration: {
+            type: "integer",
+            minimum: 4,
+            maximum: 15,
+            description: "视频秒数，默认 6。"
+          },
+          resolution: {
+            type: "string",
+            enum: ["720p", "1080p"],
+            description: "输出分辨率，默认 1080p。"
+          },
+          generateAudio: {
+            type: "boolean",
+            description: "是否生成音频，默认 false。商品视频首版通常保持关闭。"
+          }
+        }
+      }
+    }
+  },
+  permissions: ["workspace.read", "workspace.write", "network.video.generate"],
+  timeoutMs: 60_000,
+  cancelable: true
+};
+
+export const ECOMMERCE_VIDEO_STATUS_TOOL = {
+  name: "ecommerce_video_status",
+  description: "查询一个商品视频任务的最新状态和已验证产物，可进行最多 30 秒的低频长轮询。",
+  defaultVisible: false,
+  schema: {
+    type: "function",
+    function: {
+      name: "ecommerce_video_status",
+      description: "根据本地 jobId 查询状态。queued/running/interrupted 都不是完成；只有 deliveryReady=true 且存在 video artifact 时才可交付。不要连续高频调用。",
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        required: ["jobId"],
+        properties: {
+          jobId: { type: "string", description: "ecommerce_video_generate 返回的本地任务 ID。" },
+          waitMs: { type: "integer", minimum: 0, maximum: 30000, description: "可选长轮询等待，默认 0。" }
+        }
+      }
+    }
+  },
+  permissions: ["workspace.read"],
+  timeoutMs: 35_000,
+  cancelable: true
+};
+
+export const ECOMMERCE_VIDEO_CANCEL_TOOL = {
+  name: "ecommerce_video_cancel",
+  description: "取消排队或运行中的商品视频任务，并尽力把取消传递给 Provider。",
+  defaultVisible: false,
+  schema: {
+    type: "function",
+    function: {
+      name: "ecommerce_video_cancel",
+      description: "仅在用户明确要求停止任务时调用。已提交给 Provider 的任务可能在取消请求到达前产生费用；cancel_uncertain 表示不能确认 Provider 是否停止。",
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        required: ["jobId"],
+        properties: {
+          jobId: { type: "string", description: "要取消的本地任务 ID。" }
+        }
+      }
+    }
+  },
+  permissions: ["workspace.read", "workspace.write", "network.video.generate"],
+  timeoutMs: 30_000,
+  cancelable: true
+};
+
+export const ECOMMERCE_VIDEO_RETRY_TOOL = {
+  name: "ecommerce_video_retry",
+  description: "恢复可续查的中断任务，或在明确确认后复制失败任务并创建新的计费任务。",
+  defaultVisible: false,
+  schema: {
+    type: "function",
+    function: {
+      name: "ecommerce_video_retry",
+      description: "interrupted 且已有 Provider task 时续查原任务，不重复计费；其它失败或取消任务会新建任务，因此必须由用户明确同意并传 confirm=true。",
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        required: ["jobId", "confirm"],
+        properties: {
+          jobId: { type: "string", description: "要恢复或重试的本地任务 ID。" },
+          confirm: { type: "boolean", enum: [true], description: "确认允许在必要时创建新的计费任务。" }
+        }
+      }
+    }
+  },
+  permissions: ["workspace.read", "workspace.write", "network.video.generate"],
+  timeoutMs: 60_000,
+  cancelable: true
+};
+
+export const ECOMMERCE_VIDEO_LIST_TOOL = {
+  name: "ecommerce_video_list",
+  description: "查询当前 workspace 中商品视频任务及已验证的 MP4 产物。",
+  defaultVisible: false,
+  schema: {
+    type: "function",
+    function: {
+      name: "ecommerce_video_list",
+      description: "按 jobId 或状态查询商品视频任务。该工具只读取本地持久化状态，不会重新提交计费任务。",
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          jobId: { type: "string", description: "ecommerce_video_generate 返回的任务 ID。" },
+          status: {
+            type: "string",
+            enum: ["submitting", "queued", "running", "interrupted", "completed", "failed", "cancelled"]
+          },
+          limit: { type: "integer", minimum: 1, maximum: 200, description: "默认 50。" }
+        }
+      }
+    }
+  },
+  permissions: ["workspace.read"],
+  timeoutMs: 30_000,
+  cancelable: false
+};
+
 export const ECOMMERCE_IMAGE_BATCH_TOOL = {
   name: "ecommerce_image_batch",
   description: "SDK/HTTP 兼容入口：查询、取消或重试历史电商图片批次；不向模型暴露。",
