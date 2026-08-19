@@ -73,10 +73,17 @@ async function smokeGenerateAndIdempotency(root) {
     assert.equal(first.status, "completed");
     assert.equal(first.details.deliveryReady, true);
     assert.equal(first.artifacts.length, 1);
+    assert.equal(first.artifacts[0].schemaVersion, "agent-output.v1");
     assert.equal(first.artifacts[0].kind, "video");
     assert.equal(first.artifacts[0].renderer, "ecommerce-video");
-    assert.equal(path.isAbsolute(first.artifacts[0].path), false);
-    assert.deepEqual(await fs.readFile(path.join(root, ...first.artifacts[0].path.split("/"))), mp4Bytes());
+    assert.match(first.artifacts[0].id, /^ecommerce-video-video-job-/);
+    assert.equal(first.artifacts[0].files.length, 1);
+    assert.equal(path.isAbsolute(first.artifacts[0].files[0].path), false);
+    assert.equal(first.artifacts[0].files[0].mimeType, "video/mp4");
+    assert.equal(first.artifacts[0].data.schemaVersion, "agent-ecommerce-video.v1");
+    assert.equal(first.artifacts[0].data.path, first.artifacts[0].files[0].path);
+    assert.match(first.artifacts[0].data.contentHash, /^[a-f0-9]{64}$/);
+    assert.deepEqual(await fs.readFile(path.join(root, ...first.artifacts[0].files[0].path.split("/"))), mp4Bytes());
 
     const second = await runtime.generate(call);
     assert.equal(second.status, "completed");

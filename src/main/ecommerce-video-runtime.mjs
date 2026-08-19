@@ -392,13 +392,29 @@ function completedResult(details, artifacts = []) {
 function createArtifacts(job) {
   if (job.status !== "completed" || !job.path) return [];
   return [{
+    schemaVersion: "agent-output.v1",
     kind: "video",
     renderer: "ecommerce-video",
-    path: job.path,
-    mimeType: job.mimeType,
-    bytes: job.bytes,
-    contentHash: job.contentHash,
-    metadata: { jobId: job.jobId, modelId: job.modelId, duration: job.duration, resolution: job.resolution }
+    id: `ecommerce-video-${job.jobId}`,
+    title: `商品视频 ${job.jobId}`,
+    files: [{
+      path: job.path,
+      mimeType: job.mimeType,
+      bytes: job.bytes
+    }],
+    data: {
+      schemaVersion: "agent-ecommerce-video.v1",
+      jobId: job.jobId,
+      modelId: job.modelId,
+      path: job.path,
+      mimeType: job.mimeType,
+      bytes: job.bytes,
+      contentHash: job.contentHash,
+      aspectRatio: job.aspectRatio,
+      duration: job.duration,
+      resolution: job.resolution,
+      generateAudio: job.generateAudio
+    }
   }];
 }
 
