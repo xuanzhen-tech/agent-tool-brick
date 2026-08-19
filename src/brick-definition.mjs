@@ -16,7 +16,7 @@ import { fileURLToPath } from "node:url";
 
 const BRICK_ID = "agent-tool";
 const BRICK_NAME = "Agent Tool";
-const BRICK_VERSION = "0.14.0";
+const BRICK_VERSION = "0.15.0";
 const BRICK_KIND = "tool";
 
 const toolServiceCapability = createBrickCapability({
