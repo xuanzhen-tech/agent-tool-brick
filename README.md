@@ -163,20 +163,28 @@ const submitted = await agentTool.execute("ecommerce_image_generate", {
 
 ## 商品照片生视频工具
 
-首版商品视频能力固定使用 Seedance 2.0，只处理商品照片，不处理真人、数字人或人脸驱动。两个工具默认隐藏，Product 通过现有白名单选择：
+首版商品视频能力固定使用 Seedance 2.0，只处理商品照片，不处理真人、数字人或人脸驱动。五个工具默认隐藏，Product 通过现有白名单选择：
 
 ```js
 const agentTool = new AgentTool({
   workspace,
   runtimeDependencies,
   skillRuntime: agentSkill,
-  tools: ["ecommerce_video_generate", "ecommerce_video_list"]
+  tools: [
+    "ecommerce_video_generate",
+    "ecommerce_video_status",
+    "ecommerce_video_cancel",
+    "ecommerce_video_retry",
+    "ecommerce_video_list"
+  ]
 });
 ```
 
-`ecommerce_video_generate` 接受 workspace 相对 `imagePath`、完整导演 prompt，以及可选 `aspectRatio`、`duration`、`resolution`、`generateAudio`。默认值为 `adaptive`、6 秒、1080p、无音频；`modelId` 省略时固定为 `doubao-seedance-2-0`。AgentTool 会提交一次任务、持久化 Provider taskId、轮询、下载并验证 MP4，模型不需要保存 taskId 或自行轮询。只有 `deliveryReady=true` 且存在 `kind=video` artifact 才表示完成。
+`ecommerce_video_generate` 接受 workspace 相对 `imagePath`、完整导演 prompt，以及可选 `aspectRatio`、`duration`、`resolution`、`generateAudio`。默认值为 `adaptive`、6 秒、1080p、无音频；`modelId` 省略时固定为 `doubao-seedance-2-0`。它创建本地任务后立即返回 `jobId`，后台再提交 Provider、轮询、下载并验证 MP4；创建成功只表示已受理，不表示视频已经生成。
 
-任务写入 `outputs/ecommerce-videos/jobs/<jobId>/manifest.json`，结果写入同目录的 `result.mp4`。manifest 只保存 workspace 相对路径、参数、状态和哈希，不保存图片 Base64、API key 或本机绝对路径。同一 `toolCallId` 会复用已有任务，防止工具重放造成重复计费；进程重启后，已取得 Provider taskId 的未完成任务会继续查询和下载，提交结果不确定且没有 taskId 的任务不会自动重提。
+`ecommerce_video_status` 查询任务并可长轮询最多 30 秒；`ecommerce_video_cancel` 取消本地任务并尽力取消上游任务；`ecommerce_video_retry` 仅允许重试失败、取消或中断任务，创建新计费任务前必须显式传 `confirm=true`；`ecommerce_video_list` 用于查询任务历史。只有状态为 `completed`、`deliveryReady=true` 且存在 `kind=video` artifact 才表示视频可交付。模型不接触 Provider taskId。
+
+任务写入 `outputs/ecommerce-videos/jobs/<jobId>/manifest.json`，输入图片会按哈希复制到任务目录，结果写入同目录的 `result.mp4`。manifest 只保存 workspace 相对路径、参数、状态和哈希，不保存图片 Base64、API key 或本机绝对路径。同一 `toolCallId` 会复用已有任务，防止工具重放造成重复计费；进程重启后，已取得 Provider taskId 的未完成任务会继续查询和下载，提交结果不确定且没有 taskId 的任务不会自动重提。运行时默认全局最多同时处理 2 个任务，同一 workspace 最多 1 个。
 
 Product 只需要选择上述工具和 `ecommerce-product-video-generation` Skill，并按现有 artifact 方式展示 `video/mp4`。Provider 密钥、Seedance 日期版模型名、轮询和下载接口全部属于 Gateway/AgentTool 边界，Product 不需要增加相关配置。
 

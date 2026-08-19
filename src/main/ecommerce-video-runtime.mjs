@@ -25,12 +25,16 @@ const IMAGE_TYPES = new Map([
 ]);
 const ALLOWED_RATIOS = new Set(["adaptive", "16:9", "9:16", "1:1", "4:3", "3:4"]);
 const ALLOWED_RESOLUTIONS = new Set(["720p", "1080p"]);
-const TERMINAL_STATUSES = new Set(["completed", "failed"]);
+const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
 const RECOVERABLE_STATUSES = new Set(["queued", "running", "interrupted"]);
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 const MAX_PROMPT_CHARS = 20_000;
 const DEFAULT_POLL_INTERVAL_MS = 5_000;
-const DEFAULT_TASK_TIMEOUT_MS = 35 * 60_000;
+const DEFAULT_TASK_TIMEOUT_MS = 65 * 60_000;
+const DEFAULT_MAX_CONCURRENT_JOBS = 2;
+const DEFAULT_MAX_CONCURRENT_JOBS_PER_WORKSPACE = 1;
+const MAX_STATUS_WAIT_MS = 30_000;
+const JOB_WRITE_QUEUES = new Map();
 
 export function createEcommerceVideoRuntime(config, options = {}) {
   return new EcommerceVideoRuntime(config, options);
@@ -42,11 +46,17 @@ export class EcommerceVideoRuntime {
     this.submitTask = options.submitTask ?? postServerToolGatewayMultipart;
     this.readTask = options.readTask ?? requestServerToolGatewayJson;
     this.readContent = options.readContent ?? requestServerToolGatewayBinary;
+    this.cancelTask = options.cancelTask ?? requestServerToolGatewayJson;
     this.pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
     this.taskTimeoutMs = options.taskTimeoutMs ?? DEFAULT_TASK_TIMEOUT_MS;
+    this.maxConcurrentJobs = options.maxConcurrentJobs ?? DEFAULT_MAX_CONCURRENT_JOBS;
+    this.maxConcurrentJobsPerWorkspace = options.maxConcurrentJobsPerWorkspace ?? DEFAULT_MAX_CONCURRENT_JOBS_PER_WORKSPACE;
     this.workspaceInitializers = new Map();
     this.workers = new Map();
     this.controllers = new Map();
+    this.activeJobs = 0;
+    this.activeJobsByWorkspace = new Map();
+    this.permitWaiters = [];
     this.disposed = false;
   }
 
@@ -57,25 +67,93 @@ export class EcommerceVideoRuntime {
     const input = await normalizeGenerateInput(call.arguments ?? {}, workspace);
     const requestHash = hashRequest(input);
     const existing = await this.#findIdempotentJob(workspace, call.toolCallId, requestHash);
-    const job = existing ?? await this.#createAndSubmitJob(call, workspace, input);
-    const worker = this.#ensureWorker(workspace, job.jobId);
-    try {
-      const completed = await waitForPromise(worker, call.signal);
-      return jobResult(completed);
-    } catch (error) {
-      if (!call.signal?.aborted) throw error;
-      const current = await readJob(workspace, job.jobId);
-      return interruptedResult(current);
+    const job = existing ?? await this.#createJob(call, workspace, input);
+    if (!TERMINAL_STATUSES.has(job.status)) this.#ensureWorker(workspace, job.jobId);
+    return queryResult(job, { accepted: !existing });
+  }
+
+  async status(call) {
+    this.#assertActive();
+    const workspace = resolveWorkspace(call);
+    await this.#initializeWorkspace(workspace);
+    const input = normalizeStatusInput(call.arguments ?? {});
+    let job = await readJob(workspace, input.jobId);
+    const baseline = job.updatedAt;
+    if (input.waitMs > 0 && !TERMINAL_STATUSES.has(job.status)) {
+      job = await waitForJobUpdate(workspace, job.jobId, baseline, input.waitMs, call.signal, this.pollIntervalMs);
     }
+    return queryResult(job);
+  }
+
+  async cancel(call) {
+    this.#assertActive();
+    const workspace = resolveWorkspace(call);
+    await this.#initializeWorkspace(workspace);
+    const input = normalizeJobActionInput(call.arguments ?? {}, "cancel");
+    let job = await readJob(workspace, input.jobId);
+    if (TERMINAL_STATUSES.has(job.status)) return queryResult(job);
+
+    job.status = "cancelled";
+    job.error = normalizeFailure(failure("ecommerce_video_cancelled", "视频任务已取消。", false));
+    job.updatedAt = nowIso();
+    job.completedAt = job.updatedAt;
+    await writeJob(workspace, job);
+    this.#abortWorker(workspace, job.jobId, new Error("Video job cancelled."));
+
+    if (job.providerTaskId) {
+      try {
+        await this.cancelTask(
+          this.config,
+          `/api/tools/ecommerce/videos/tasks/${encodeURIComponent(job.providerTaskId)}/cancel`,
+          { method: "POST" },
+          call.signal
+        );
+      } catch (error) {
+        job = await readJob(workspace, job.jobId);
+        job.error = normalizeFailure(failure(
+          "ecommerce_video_cancel_uncertain",
+          `本地已停止等待，但 Provider 取消结果不确定：${formatError(error)}`,
+          true
+        ));
+        job.updatedAt = nowIso();
+        await writeJob(workspace, job);
+      }
+    }
+    return queryResult(await readJob(workspace, job.jobId));
+  }
+
+  async retry(call) {
+    this.#assertActive();
+    const workspace = resolveWorkspace(call);
+    await this.#initializeWorkspace(workspace);
+    const input = normalizeJobActionInput(call.arguments ?? {}, "retry");
+    if (input.confirm !== true) throw failure("ecommerce_video_retry_confirmation_required", "重试会创建新的计费任务，必须传 confirm=true。", false);
+    const previous = await readJob(workspace, input.jobId);
+    if (previous.status === "interrupted" && previous.providerTaskId) {
+      previous.status = "queued";
+      delete previous.error;
+      delete previous.completedAt;
+      previous.updatedAt = nowIso();
+      await writeJob(workspace, previous);
+      this.#ensureWorker(workspace, previous.jobId);
+      return queryResult(previous, { resumed: true });
+    }
+    if (!["failed", "cancelled", "interrupted"].includes(previous.status)) {
+      throw failure("ecommerce_video_retry_not_allowed", "只有 failed、cancelled 或 interrupted 任务可以重试。", false);
+    }
+    const job = await this.#cloneJobForRetry(call, workspace, previous);
+    this.#ensureWorker(workspace, job.jobId);
+    return queryResult(job, { accepted: true, retriedFromJobId: previous.jobId });
   }
 
   async list(call) {
+    this.#assertActive();
     const workspace = resolveWorkspace(call);
     await this.#initializeWorkspace(workspace);
     const input = normalizeListInput(call.arguments ?? {});
     if (input.jobId) {
       const job = await readJob(workspace, input.jobId);
-      return completedResult({ jobs: [publicJob(job)], total: 1 }, createArtifacts(job));
+      return queryResult(job);
     }
     const jobs = await listJobs(workspace);
     const selected = input.status ? jobs.filter((job) => job.status === input.status) : jobs;
@@ -89,6 +167,7 @@ export class EcommerceVideoRuntime {
     if (this.disposed) return;
     this.disposed = true;
     for (const controller of this.controllers.values()) controller.abort(new Error("AgentTool is disposing."));
+    for (const waiter of this.permitWaiters.splice(0)) waiter.reject(new Error("AgentTool is disposing."));
     await Promise.allSettled(this.workers.values());
     this.controllers.clear();
     this.workers.clear();
@@ -116,7 +195,9 @@ export class EcommerceVideoRuntime {
         await writeJob(workspace, job);
         continue;
       }
-      if (job.providerTaskId && RECOVERABLE_STATUSES.has(job.status)) this.#ensureWorker(workspace, job.jobId);
+      if (RECOVERABLE_STATUSES.has(job.status) && (job.providerTaskId || job.submissionState === "not_submitted")) {
+        this.#ensureWorker(workspace, job.jobId);
+      }
     }
   }
 
@@ -130,14 +211,19 @@ export class EcommerceVideoRuntime {
     return job;
   }
 
-  async #createAndSubmitJob(call, workspace, input) {
+  async #createJob(call, workspace, input, extra = {}) {
+    const jobId = createId("video-job");
+    const sourceExtension = input.image.mimeType === "image/png" ? ".png" : input.image.mimeType === "image/webp" ? ".webp" : ".jpg";
+    const sourceCopyPath = `outputs/ecommerce-videos/jobs/${jobId}/source${sourceExtension}`;
     const job = {
       schemaVersion: SCHEMA_VERSION,
-      jobId: createId("video-job"),
+      jobId,
       modelId: MODEL_ID,
-      status: "submitting",
+      status: "queued",
+      submissionState: "not_submitted",
       prompt: input.prompt,
       sourceImagePath: input.sourceImagePath,
+      sourceCopyPath,
       sourceImageMimeType: input.image.mimeType,
       sourceImageBytes: input.image.bytes.length,
       sourceImageHash: sha256(input.image.bytes),
@@ -148,27 +234,62 @@ export class EcommerceVideoRuntime {
       toolCallId: typeof call.toolCallId === "string" ? call.toolCallId : undefined,
       requestHash: hashRequest(input),
       traceContext: normalizeTraceContext(call.traceContext),
+      ...extra,
       createdAt: nowIso(),
       updatedAt: nowIso()
     };
+    await atomicWriteBuffer(path.join(workspace, ...sourceCopyPath.split("/")), input.image.bytes);
+    await writeJob(workspace, job);
+    return job;
+  }
+
+  async #cloneJobForRetry(call, workspace, previous) {
+    const sourceRelativePath = previous.sourceCopyPath ?? previous.sourceImagePath;
+    const sourcePath = path.join(workspace, ...sourceRelativePath.split("/"));
+    const bytes = await fs.readFile(sourcePath).catch(() => undefined);
+    if (!bytes || sha256(bytes) !== previous.sourceImageHash) {
+      throw failure("ecommerce_video_retry_source_missing", "原任务的输入图片副本缺失或已损坏，不能安全重试。", false);
+    }
+    return await this.#createJob(call, workspace, {
+      modelId: previous.modelId,
+      prompt: previous.prompt,
+      sourceImagePath: previous.sourceImagePath,
+      absoluteImagePath: sourcePath,
+      image: { bytes, mimeType: previous.sourceImageMimeType },
+      aspectRatio: previous.aspectRatio,
+      duration: previous.duration,
+      resolution: previous.resolution,
+      generateAudio: previous.generateAudio
+    }, { parentJobId: previous.jobId });
+  }
+
+  async #submitJob(workspace, job, signal) {
+    const sourcePath = path.join(workspace, ...job.sourceCopyPath.split("/"));
+    const imageBytes = await fs.readFile(sourcePath);
+    if (sha256(imageBytes) !== job.sourceImageHash) {
+      throw failure("ecommerce_video_source_copy_invalid", "任务输入图片副本校验失败。", false);
+    }
+    job.status = "submitting";
+    job.submissionState = "submitting";
+    job.updatedAt = nowIso();
     await writeJob(workspace, job);
     try {
       const response = await this.submitTask(this.config, "/api/tools/ecommerce/videos/generate", {
         request: {
-          prompt: input.prompt,
-          aspectRatio: input.aspectRatio,
-          duration: input.duration,
-          resolution: input.resolution,
-          generateAudio: input.generateAudio
+          prompt: job.prompt,
+          aspectRatio: job.aspectRatio,
+          duration: job.duration,
+          resolution: job.resolution,
+          generateAudio: job.generateAudio
         },
-        images: [{ bytes: input.image.bytes, mimeType: input.image.mimeType, filename: path.basename(input.absoluteImagePath) }],
+        images: [{ bytes: imageBytes, mimeType: job.sourceImageMimeType, filename: path.basename(sourcePath) }],
         trace: compactObject({
           ...job.traceContext,
           operationId: job.jobId,
           itemId: job.jobId,
           operation: "ecommerce_video_generate"
         })
-      }, call.signal);
+      }, signal);
       const task = response?.task;
       if (!task || typeof task.id !== "string" || task.status !== "queued") {
         throw failure("ecommerce_video_invalid_gateway_response", "Gateway 未返回有效 Seedance 任务。", true);
@@ -176,12 +297,25 @@ export class EcommerceVideoRuntime {
       job.providerTaskId = task.id;
       job.gatewayTraceId = typeof task.traceId === "string" ? task.traceId : undefined;
       job.status = "queued";
+      job.submissionState = "submitted";
       job.updatedAt = nowIso();
       await writeJob(workspace, job);
       return job;
     } catch (error) {
+      const current = await readJob(workspace, job.jobId).catch(() => undefined);
+      if (current?.status === "cancelled") return current;
       job.status = "failed";
-      job.error = normalizeFailure(error);
+      if (isDefinitiveSubmissionRejection(error)) {
+        job.submissionState = "rejected";
+        job.error = normalizeFailure(error);
+      } else {
+        job.submissionState = "unknown";
+        job.error = normalizeFailure(failure(
+          "ecommerce_video_submission_uncertain",
+          `视频任务提交未确认，为避免重复计费不会自动重提：${formatError(error)}`,
+          false
+        ));
+      }
       job.updatedAt = nowIso();
       job.completedAt = job.updatedAt;
       await writeJob(workspace, job);
@@ -205,12 +339,20 @@ export class EcommerceVideoRuntime {
   }
 
   async #runJob(workspace, jobId, signal) {
+    let releasePermit;
     let job = await readJob(workspace, jobId);
     if (TERMINAL_STATUSES.has(job.status)) return job;
-    if (!job.providerTaskId) return job;
-    const deadline = Date.now() + this.taskTimeoutMs;
     let transientFailures = 0;
     try {
+      releasePermit = await this.#acquirePermit(workspace, signal);
+      job = await readJob(workspace, jobId);
+      if (TERMINAL_STATUSES.has(job.status)) return job;
+      if (!job.providerTaskId) {
+        if (job.submissionState !== "not_submitted") return job;
+        job = await this.#submitJob(workspace, job, signal);
+        if (!job.providerTaskId || job.status === "failed") return job;
+      }
+      const deadline = Date.now() + this.taskTimeoutMs;
       while (Date.now() < deadline) {
         if (signal.aborted) throw signal.reason ?? new Error("Video worker aborted.");
         let response;
@@ -228,7 +370,9 @@ export class EcommerceVideoRuntime {
           await delay(Math.min(this.pollIntervalMs * (2 ** transientFailures), 30_000), signal);
           continue;
         }
-        const providerStatus = response?.task?.status;
+        const providerTask = response?.task;
+        const providerStatus = providerTask?.status;
+        applyProviderMetadata(job, providerTask);
         if (providerStatus === "queued" || providerStatus === "running") {
           job.status = providerStatus;
           job.updatedAt = nowIso();
@@ -281,11 +425,18 @@ export class EcommerceVideoRuntime {
         }
         throw failure("ecommerce_video_invalid_gateway_response", "Gateway 返回未知视频任务状态。", true);
       }
-      throw failure("ecommerce_video_task_timeout", "视频任务超过 35 分钟仍未完成。", true);
+      job.status = "interrupted";
+      job.error = normalizeFailure(failure("ecommerce_video_task_wait_timeout", "本地等待超过 65 分钟；Provider 任务未被判定失败，可稍后继续查询。", true));
+      job.updatedAt = nowIso();
+      await writeJob(workspace, job);
+      return job;
     } catch (error) {
       if (signal.aborted) {
+        const current = await readJob(workspace, jobId).catch(() => job);
+        if (current.status === "cancelled") return current;
+        job = current;
         job.status = "interrupted";
-        job.error = failure("ecommerce_video_interrupted", "本地进程已停止；下次初始化将继续查询该任务。", true);
+        job.error = normalizeFailure(failure("ecommerce_video_interrupted", "本地进程已停止；下次初始化将继续查询同一个 Provider 任务。", true));
         job.updatedAt = nowIso();
         await writeJob(workspace, job);
         return job;
@@ -296,6 +447,60 @@ export class EcommerceVideoRuntime {
       job.completedAt = job.updatedAt;
       await writeJob(workspace, job);
       return job;
+    } finally {
+      releasePermit?.();
+    }
+  }
+
+  #abortWorker(workspace, jobId, reason) {
+    this.controllers.get(`${workspace}\n${jobId}`)?.abort(reason);
+  }
+
+  #acquirePermit(workspace, signal) {
+    if (this.#hasPermit(workspace)) {
+      this.#takePermit(workspace);
+      return Promise.resolve(() => this.#releasePermit(workspace));
+    }
+    return new Promise((resolve, reject) => {
+      const waiter = { workspace, resolve, reject, signal };
+      const abort = () => {
+        this.permitWaiters = this.permitWaiters.filter((entry) => entry !== waiter);
+        reject(signal.reason ?? new Error("Video permit wait aborted."));
+      };
+      waiter.abort = abort;
+      if (signal.aborted) abort();
+      else {
+        signal.addEventListener("abort", abort, { once: true });
+        this.permitWaiters.push(waiter);
+      }
+    });
+  }
+
+  #hasPermit(workspace) {
+    return this.activeJobs < this.maxConcurrentJobs
+      && (this.activeJobsByWorkspace.get(workspace) ?? 0) < this.maxConcurrentJobsPerWorkspace;
+  }
+
+  #takePermit(workspace) {
+    this.activeJobs += 1;
+    this.activeJobsByWorkspace.set(workspace, (this.activeJobsByWorkspace.get(workspace) ?? 0) + 1);
+  }
+
+  #releasePermit(workspace) {
+    this.activeJobs = Math.max(0, this.activeJobs - 1);
+    const remaining = Math.max(0, (this.activeJobsByWorkspace.get(workspace) ?? 1) - 1);
+    if (remaining) this.activeJobsByWorkspace.set(workspace, remaining);
+    else this.activeJobsByWorkspace.delete(workspace);
+    this.#drainPermitWaiters();
+  }
+
+  #drainPermitWaiters() {
+    for (const waiter of [...this.permitWaiters]) {
+      if (!this.#hasPermit(waiter.workspace)) continue;
+      this.permitWaiters = this.permitWaiters.filter((entry) => entry !== waiter);
+      waiter.signal.removeEventListener("abort", waiter.abort);
+      this.#takePermit(waiter.workspace);
+      waiter.resolve(() => this.#releasePermit(waiter.workspace));
     }
   }
 
@@ -348,7 +553,7 @@ function normalizeListInput(value) {
   const jobId = readString(value.jobId);
   if (jobId && !/^video-job-[a-f0-9-]{16,}$/.test(jobId)) throw failure("ecommerce_video_invalid_job_id", "jobId 无效。", false);
   const status = readString(value.status);
-  if (status && !["submitting", "queued", "running", "interrupted", "completed", "failed"].includes(status)) {
+  if (status && !["submitting", "queued", "running", "interrupted", "completed", "failed", "cancelled"].includes(status)) {
     throw failure("ecommerce_video_invalid_status", "status 无效。", false);
   }
   const limit = value.limit === undefined ? 50 : Number(value.limit);
@@ -356,33 +561,44 @@ function normalizeListInput(value) {
   return { jobId, status, limit };
 }
 
-function jobResult(job) {
+function normalizeStatusInput(value) {
+  assertRecord(value, "ecommerce_video_status 参数必须是对象。");
+  assertAllowedKeys(value, ["jobId", "waitMs"]);
+  const jobId = requireJobId(value.jobId);
+  const waitMs = value.waitMs === undefined ? 0 : Number(value.waitMs);
+  if (!Number.isInteger(waitMs) || waitMs < 0 || waitMs > MAX_STATUS_WAIT_MS) {
+    throw failure("ecommerce_video_invalid_wait", `waitMs 必须是 0 到 ${MAX_STATUS_WAIT_MS} 的整数。`, false);
+  }
+  return { jobId, waitMs };
+}
+
+function normalizeJobActionInput(value, action) {
+  assertRecord(value, `ecommerce_video_${action} 参数必须是对象。`);
+  const allowed = action === "retry" ? ["jobId", "confirm"] : ["jobId"];
+  assertAllowedKeys(value, allowed);
+  if (action === "retry" && value.confirm !== undefined && typeof value.confirm !== "boolean") {
+    throw failure("ecommerce_video_invalid_confirmation", "confirm 必须是 boolean。", false);
+  }
+  return { jobId: requireJobId(value.jobId), confirm: value.confirm };
+}
+
+function requireJobId(value) {
+  const jobId = readString(value);
+  if (!jobId || !/^video-job-[a-f0-9-]{16,}$/.test(jobId)) {
+    throw failure("ecommerce_video_invalid_job_id", "jobId 无效。", false);
+  }
+  return jobId;
+}
+
+function queryResult(job, extra = {}) {
   const artifacts = createArtifacts(job);
   const details = {
     job: publicJob(job),
     deliveryReady: job.status === "completed" && artifacts.length === 1,
-    artifacts
-  };
-  if (job.status === "completed") return completedResult(details, artifacts);
-  if (job.status === "interrupted") return interruptedResult(job);
-  return {
-    status: "failed",
-    content: JSON.stringify(details, null, 2),
-    details,
     artifacts,
-    error: job.error ?? failure("ecommerce_video_failed", "视频任务失败。", false)
+    ...extra
   };
-}
-
-function interruptedResult(job) {
-  const details = { job: publicJob(job), deliveryReady: false, artifacts: [] };
-  return {
-    status: "interrupted",
-    content: JSON.stringify(details, null, 2),
-    details,
-    artifacts: [],
-    error: failure("ecommerce_video_wait_interrupted", "本次等待已中断；任务状态仍可通过 ecommerce_video_list 查询。", true)
-  };
+  return completedResult(details, artifacts);
 }
 
 function completedResult(details, artifacts = []) {
@@ -413,7 +629,14 @@ function createArtifacts(job) {
       aspectRatio: job.aspectRatio,
       duration: job.duration,
       resolution: job.resolution,
-      generateAudio: job.generateAudio
+      generateAudio: job.generateAudio,
+      actual: compactObject({
+        duration: job.actualDuration,
+        resolution: job.actualResolution,
+        aspectRatio: job.actualAspectRatio,
+        framesPerSecond: job.framesPerSecond,
+        usage: job.usage
+      })
     }
   }];
 }
@@ -428,7 +651,12 @@ function publicJob(job) {
     duration: job.duration,
     resolution: job.resolution,
     generateAudio: job.generateAudio,
-    providerTaskId: job.providerTaskId,
+    actualDuration: job.actualDuration,
+    actualResolution: job.actualResolution,
+    actualAspectRatio: job.actualAspectRatio,
+    framesPerSecond: job.framesPerSecond,
+    usage: job.usage,
+    parentJobId: job.parentJobId,
     path: job.path,
     mimeType: job.mimeType,
     bytes: job.bytes,
@@ -464,7 +692,27 @@ async function readJob(workspace, jobId) {
 }
 
 async function writeJob(workspace, job) {
-  await atomicWriteJson(jobManifestPath(workspace, job.jobId), job);
+  const filePath = jobManifestPath(workspace, job.jobId);
+  const previous = JOB_WRITE_QUEUES.get(filePath) ?? Promise.resolve();
+  const current = previous.catch(() => undefined).then(async () => {
+    const existing = await fs.readFile(filePath, "utf8")
+      .then((value) => JSON.parse(value))
+      .catch((error) => {
+        if (error?.code === "ENOENT") return undefined;
+        throw error;
+      });
+    if (TERMINAL_STATUSES.has(existing?.status) && existing.status !== job.status) {
+      return existing;
+    }
+    await atomicWriteJson(filePath, job);
+    return job;
+  });
+  JOB_WRITE_QUEUES.set(filePath, current);
+  try {
+    return await current;
+  } finally {
+    if (JOB_WRITE_QUEUES.get(filePath) === current) JOB_WRITE_QUEUES.delete(filePath);
+  }
 }
 
 function workspacePaths(workspace) {
@@ -554,6 +802,15 @@ function normalizeFailure(error) {
   };
 }
 
+function isDefinitiveSubmissionRejection(error) {
+  if (error?.code === "server_tool_gateway_unavailable") return true;
+  const statusCode = Number(error?.statusCode);
+  return Number.isInteger(statusCode)
+    && statusCode >= 400
+    && statusCode < 500
+    && ![408, 425, 499].includes(statusCode);
+}
+
 function assertRecord(value, message) {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw failure("ecommerce_video_invalid_arguments", message, false);
 }
@@ -569,6 +826,22 @@ function readString(value) {
 
 function compactObject(value) {
   return Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined));
+}
+
+function applyProviderMetadata(job, task) {
+  if (!task || typeof task !== "object" || Array.isArray(task)) return;
+  if (Number.isInteger(task.duration) && task.duration >= 0) job.actualDuration = task.duration;
+  if (typeof task.resolution === "string" && task.resolution.trim()) job.actualResolution = task.resolution.trim();
+  if (typeof task.aspectRatio === "string" && task.aspectRatio.trim()) job.actualAspectRatio = task.aspectRatio.trim();
+  if (Number.isInteger(task.framesPerSecond) && task.framesPerSecond > 0) job.framesPerSecond = task.framesPerSecond;
+  if (task.usage && typeof task.usage === "object" && !Array.isArray(task.usage)) {
+    const completionTokens = Number.isInteger(task.usage.completionTokens) ? task.usage.completionTokens : undefined;
+    const totalTokens = Number.isInteger(task.usage.totalTokens) ? task.usage.totalTokens : undefined;
+    const amountUsd = Number.isFinite(task.usage.amountUsd) && task.usage.amountUsd >= 0 ? task.usage.amountUsd : undefined;
+    if (completionTokens !== undefined || totalTokens !== undefined || amountUsd !== undefined) {
+      job.usage = compactObject({ completionTokens, totalTokens, amountUsd });
+    }
+  }
 }
 
 function sha256(value) {
@@ -616,16 +889,6 @@ function delay(ms, signal) {
   });
 }
 
-function waitForPromise(promise, signal) {
-  if (!signal) return promise;
-  return new Promise((resolve, reject) => {
-    const abort = () => reject(signal.reason ?? new Error("任务已取消。"));
-    if (signal.aborted) return abort();
-    signal.addEventListener("abort", abort, { once: true });
-    promise.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
-  });
-}
-
 async function retrySameTask(operation, signal, baseDelayMs) {
   let lastError;
   for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -638,4 +901,14 @@ async function retrySameTask(operation, signal, baseDelayMs) {
     }
   }
   throw lastError;
+}
+
+async function waitForJobUpdate(workspace, jobId, baseline, waitMs, signal, pollIntervalMs) {
+  const deadline = Date.now() + waitMs;
+  let job = await readJob(workspace, jobId);
+  while (Date.now() < deadline && !TERMINAL_STATUSES.has(job.status) && job.updatedAt === baseline) {
+    await delay(Math.min(pollIntervalMs, Math.max(1, deadline - Date.now())), signal);
+    job = await readJob(workspace, jobId);
+  }
+  return job;
 }

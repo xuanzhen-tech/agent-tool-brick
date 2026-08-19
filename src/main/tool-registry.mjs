@@ -17,6 +17,9 @@ import {
   ECOMMERCE_IMAGE_JOB_STATUS_TOOL,
   ECOMMERCE_IMAGE_LIST_TOOL,
   ECOMMERCE_VIDEO_GENERATE_TOOL,
+  ECOMMERCE_VIDEO_STATUS_TOOL,
+  ECOMMERCE_VIDEO_CANCEL_TOOL,
+  ECOMMERCE_VIDEO_RETRY_TOOL,
   ECOMMERCE_VIDEO_LIST_TOOL,
   EXEC_COMMAND_TOOL,
   IMAGE_PRESENT_TOOL,
@@ -79,6 +82,9 @@ const BUILTIN_TOOL_NAMES = new Set([
   ECOMMERCE_IMAGE_JOB_RETRY_TOOL.name,
   ECOMMERCE_IMAGE_LIST_TOOL.name,
   ECOMMERCE_VIDEO_GENERATE_TOOL.name,
+  ECOMMERCE_VIDEO_STATUS_TOOL.name,
+  ECOMMERCE_VIDEO_CANCEL_TOOL.name,
+  ECOMMERCE_VIDEO_RETRY_TOOL.name,
   ECOMMERCE_VIDEO_LIST_TOOL.name,
   VISUALIZATION_CREATE_CHART_TOOL.name,
   VISUALIZATION_CREATE_DASHBOARD_TOOL.name
@@ -172,6 +178,9 @@ export async function createToolRegistry(config, options = {}) {
 
   if (ecommerceVideoRuntime) {
     addTool(ECOMMERCE_VIDEO_GENERATE_TOOL, (call, _currentConfig, signal) => ecommerceVideoRuntime.generate({ ...call, signal }));
+    addTool(ECOMMERCE_VIDEO_STATUS_TOOL, (call, _currentConfig, signal) => ecommerceVideoRuntime.status({ ...call, signal }));
+    addTool(ECOMMERCE_VIDEO_CANCEL_TOOL, (call, _currentConfig, signal) => ecommerceVideoRuntime.cancel({ ...call, signal }));
+    addTool(ECOMMERCE_VIDEO_RETRY_TOOL, (call, _currentConfig, signal) => ecommerceVideoRuntime.retry({ ...call, signal }));
     addTool(ECOMMERCE_VIDEO_LIST_TOOL, (call, _currentConfig, signal) => ecommerceVideoRuntime.list({ ...call, signal }));
   }
 
