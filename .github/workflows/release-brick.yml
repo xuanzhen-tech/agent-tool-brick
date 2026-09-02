@@ -40,6 +40,14 @@ jobs:
           registry-url: https://npm.pkg.github.com
           scope: "@xuanzhen-tech"
 
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install spreadsheet runtime dependencies
+        run: python -m pip install openpyxl==3.1.5
+
       - name: Install dependencies
         run: npm ci
         env:
@@ -58,6 +66,7 @@ jobs:
           node --check src/main/launch-config.mjs
           node --check src/main/process-runtime.mjs
           node --check src/main/search-runtime.mjs
+          node --check src/main/spreadsheet-runtime.mjs
           node --check src/main/server.mjs
           node --check src/main/shell-runtime.mjs
           node --check src/main/skill-resource-runtime.mjs
@@ -86,10 +95,12 @@ jobs:
           node --check src/scripts/smoke-agent-cli-gateway-kimi-skill-resource.mjs
           node --check src/scripts/smoke-agent-cli-gateway-deepseek-ecommerce-image.mjs
           node --check src/scripts/smoke-server.mjs
+          node --check src/scripts/smoke-spreadsheets.mjs
           node --check src/scripts/smoke-tools.mjs
           node --check src/scripts/smoke-tool-results.mjs
           node --check src/scripts/smoke-visualizations.mjs
           node --check src/scripts/verify.mjs
+          python -m py_compile src/main/spreadsheet-worker.py src/scripts/create-spreadsheet-fixtures.py
 
       - name: Smoke tests
         run: |
@@ -100,6 +111,7 @@ jobs:
           npm run smoke:ecommerce-images
           npm run smoke:ecommerce-videos
           npm run smoke:visualizations
+          npm run smoke:spreadsheets
           npm run smoke:server
 
       - name: Build runtime artifact

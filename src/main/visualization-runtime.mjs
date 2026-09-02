@@ -12,6 +12,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import { Resvg } from "@resvg/resvg-js";
+import {
+  resolveSpreadsheetDataRef,
+  resolveSpreadsheetValueRef
+} from "./spreadsheet-runtime.mjs";
 import { getVegaRuntime } from "./vega-runtime.mjs";
 
 const MAX_INLINE_DATA_BYTES = 2 * 1024 * 1024;
@@ -34,11 +38,13 @@ export async function executeVisualizationCreateChart(call, _config, signal) {
   throwIfAborted(signal);
   const input = normalizeChartInput(call.arguments ?? {});
   const workspace = resolveWorkspace(call);
+  const materialized = await materializeChartInput(input, workspace);
   const artifact = await renderChartArtifact({
     workspace,
-    title: input.title,
-    spec: input.spec,
-    data: input.data,
+    title: materialized.title,
+    spec: materialized.spec,
+    data: materialized.data,
+    lineage: materialized.lineage,
     signal
   });
   return completedResult("已生成图表", artifact);
@@ -52,11 +58,12 @@ export async function executeVisualizationCreateDashboard(call, _config, signal)
   throwIfAborted(signal);
   const input = normalizeDashboardInput(call.arguments ?? {});
   const workspace = resolveWorkspace(call);
+  const materialized = await materializeDashboardInput(input, workspace);
   const artifactId = createArtifactId("dashboard");
   const directory = await createArtifactDirectory(workspace, artifactId);
   const chartArtifacts = [];
 
-  for (const [index, panel] of input.panels.entries()) {
+  for (const [index, panel] of materialized.panels.entries()) {
     throwIfAborted(signal);
     if (panel.kind !== "chart") continue;
     const chart = await renderChartFiles({
@@ -65,6 +72,7 @@ export async function executeVisualizationCreateDashboard(call, _config, signal)
       title: panel.title,
       spec: panel.spec,
       data: panel.data,
+      lineage: panel.lineage,
       signal
     });
     chartArtifacts.push({ panelId: panel.id, ...chart });
@@ -73,11 +81,11 @@ export async function executeVisualizationCreateDashboard(call, _config, signal)
   const dashboard = {
     schemaVersion: "agent-dashboard.v1",
     id: artifactId,
-    title: input.title,
-    summary: input.summary,
-    kpis: input.kpis,
-    insights: input.insights,
-    panels: input.panels.map((panel) => panel.kind === "chart"
+    title: materialized.title,
+    summary: materialized.summary,
+    kpis: materialized.kpis,
+    insights: materialized.insights,
+    panels: materialized.panels.map((panel) => panel.kind === "chart"
       ? {
           id: panel.id,
           kind: panel.kind,
@@ -106,7 +114,8 @@ export async function executeVisualizationCreateDashboard(call, _config, signal)
     kind: "visualization",
     renderer: "dashboard",
     id: artifactId,
-    title: input.title,
+    title: materialized.title,
+    lineage: materialized.lineage,
     files: [
       toOutputFile(workspace, dashboardPath, "application/json", Buffer.byteLength(dashboardContent, "utf8")),
       toOutputFile(workspace, htmlPath, "text/html", Buffer.byteLength(htmlContent, "utf8")),
@@ -119,7 +128,8 @@ export async function executeVisualizationCreateDashboard(call, _config, signal)
     kind: "visualization",
     renderer: "dashboard",
     id: artifactId,
-    title: input.title,
+    title: materialized.title,
+    lineage: materialized.lineage,
     files: [
       toOutputFile(workspace, dashboardPath, "application/json", Buffer.byteLength(dashboardContent, "utf8")),
       toOutputFile(workspace, htmlPath, "text/html", Buffer.byteLength(htmlContent, "utf8")),
@@ -131,10 +141,10 @@ export async function executeVisualizationCreateDashboard(call, _config, signal)
   return completedResult("已生成结构化 BI 看板", artifact);
 }
 
-async function renderChartArtifact({ workspace, title, spec, data, signal }) {
+async function renderChartArtifact({ workspace, title, spec, data, lineage, signal }) {
   const artifactId = createArtifactId("chart");
   const directory = await createArtifactDirectory(workspace, artifactId);
-  const chart = await renderChartFiles({ directory, fileStem: "chart", title, spec, data, signal });
+  const chart = await renderChartFiles({ directory, fileStem: "chart", title, spec, data, lineage, signal });
   const manifestPath = path.join(directory, "manifest.json");
   const artifact = {
     schemaVersion: VISUALIZATION_OUTPUT_SCHEMA_VERSION,
@@ -142,6 +152,7 @@ async function renderChartArtifact({ workspace, title, spec, data, signal }) {
     renderer: "vega-lite",
     id: artifactId,
     title,
+    lineage,
     files: [
       ...chart.files.map((file) => toOutputFile(workspace, path.join(directory, file.path), file.mimeType)),
       toOutputFile(workspace, manifestPath, "application/json")
@@ -152,7 +163,7 @@ async function renderChartArtifact({ workspace, title, spec, data, signal }) {
   return artifact;
 }
 
-async function renderChartFiles({ directory, fileStem, title, spec, data, signal }) {
+async function renderChartFiles({ directory, fileStem, title, spec, data, lineage, signal }) {
   throwIfAborted(signal);
   const normalizedSpec = normalizeVegaLiteSpec(spec, data, title);
   const { vega, vegaLite } = getVegaRuntime();
@@ -179,6 +190,7 @@ async function renderChartFiles({ directory, fileStem, title, spec, data, signal
     inline: {
       schemaVersion: "agent-visualization.vega-lite.v1",
       title,
+      lineage,
       spec: normalizedSpec,
       preview: { svgFile: svgPath, pngFile: pngPath }
     }
@@ -187,10 +199,17 @@ async function renderChartFiles({ directory, fileStem, title, spec, data, signal
 
 function normalizeChartInput(input) {
   if (!isRecord(input)) throw invalidInput("图表参数必须是对象。");
+  if (input.data !== undefined && input.dataRef !== undefined) {
+    throw invalidInput("data 与 dataRef 互斥，不能同时提供。 ");
+  }
+  if (input.dataRef !== undefined && isRecord(input.spec) && input.spec.data !== undefined) {
+    throw invalidInput("使用 dataRef 时 spec 不能再携带内联 data。 ");
+  }
   return {
     title: normalizeTitle(input.title ?? "未命名图表"),
     spec: requireRecord(input.spec, "spec"),
-    data: input.data
+    data: input.data,
+    dataRef: input.dataRef
   };
 }
 
@@ -207,19 +226,29 @@ function normalizeDashboardInput(input) {
     panelIds.add(id);
     const kind = String(raw.kind ?? "").trim();
     if (kind === "chart") {
+      if (raw.data !== undefined && raw.dataRef !== undefined) {
+        throw invalidInput(`panels[${index}] 的 data 与 dataRef 互斥。`);
+      }
+      if (raw.dataRef !== undefined && isRecord(raw.spec) && raw.spec.data !== undefined) {
+        throw invalidInput(`panels[${index}] 使用 dataRef 时 spec 不能携带内联 data。`);
+      }
       return {
         id,
         kind,
         title: normalizeTitle(raw.title ?? `图表 ${index + 1}`),
         description: optionalText(raw.description, 600),
         spec: requireRecord(raw.spec, `panels[${index}].spec`),
-        data: raw.data
+        data: raw.data,
+        dataRef: raw.dataRef
       };
     }
     if (kind === "table") {
       const columns = Array.isArray(raw.columns) ? raw.columns.map((column) => normalizeTitle(column)) : [];
       const rows = Array.isArray(raw.rows) ? raw.rows : [];
-      if (!columns.length) throw invalidInput(`panels[${index}] 的 table 需要 columns。`);
+      if (raw.rows !== undefined && raw.dataRef !== undefined) {
+        throw invalidInput(`panels[${index}] 的 rows 与 dataRef 互斥。`);
+      }
+      if (!columns.length && raw.dataRef === undefined) throw invalidInput(`panels[${index}] 的 table 需要 columns。`);
       if (rows.length > MAX_TABLE_ROWS) throw invalidInput(`panels[${index}] 的 table 最多允许 ${MAX_TABLE_ROWS} 行。`);
       return {
         id,
@@ -227,7 +256,8 @@ function normalizeDashboardInput(input) {
         title: normalizeTitle(raw.title ?? `表格 ${index + 1}`),
         description: optionalText(raw.description, 600),
         columns,
-        rows: rows.map((row) => Array.isArray(row) ? row.map((cell) => serializeCell(cell)) : columns.map((column) => serializeCell(row?.[column])))
+        rows: rows.map((row) => Array.isArray(row) ? row.map((cell) => serializeCell(cell)) : columns.map((column) => serializeCell(row?.[column]))),
+        dataRef: raw.dataRef
       };
     }
     if (kind === "text") {
@@ -351,12 +381,102 @@ function normalizeKpis(value) {
   if (!Array.isArray(value) || value.length > 20) throw invalidInput("kpis 必须是最多 20 项的数组。 ");
   return value.map((item, index) => {
     if (!isRecord(item)) throw invalidInput(`kpis[${index}] 必须是对象。`);
+    if (item.value !== undefined && item.valueRef !== undefined) {
+      throw invalidInput(`kpis[${index}] 的 value 与 valueRef 互斥。`);
+    }
+    if (item.change !== undefined && item.changeRef !== undefined) {
+      throw invalidInput(`kpis[${index}] 的 change 与 changeRef 互斥。`);
+    }
     return {
       label: normalizeTitle(item.label ?? `指标 ${index + 1}`),
       value: optionalText(item.value, 200),
+      valueRef: item.valueRef,
       change: optionalText(item.change, 200),
+      changeRef: item.changeRef,
       tone: ["neutral", "positive", "negative"].includes(item.tone) ? item.tone : "neutral"
     };
+  });
+}
+
+async function materializeChartInput(input, workspace) {
+  if (!input.dataRef) return { ...input, lineage: [] };
+  const resolved = await resolveSpreadsheetDataRef(workspace, input.dataRef);
+  return {
+    ...input,
+    data: resolved.rows,
+    lineage: [resolved.provenance]
+  };
+}
+
+async function materializeDashboardInput(input, workspace) {
+  const valueCache = new Map();
+  const lineage = [];
+  const panels = [];
+  for (const panel of input.panels) {
+    if (!panel.dataRef) {
+      panels.push({ ...panel, lineage: [] });
+      continue;
+    }
+    const resolved = await resolveSpreadsheetDataRef(workspace, panel.dataRef);
+    lineage.push(resolved.provenance);
+    if (panel.kind === "chart") {
+      panels.push({ ...panel, data: resolved.rows, lineage: [resolved.provenance] });
+      continue;
+    }
+    const columns = panel.columns.length ? panel.columns : resolved.columns.map((column) => column.name);
+    if (resolved.rawRows.length > MAX_TABLE_ROWS) {
+      throw invalidInput(`dataRef 的表格结果超过 ${MAX_TABLE_ROWS} 行，请先用 spreadsheet_compute 聚合或限制行数。`);
+    }
+    for (const column of columns) {
+      if (!resolved.columns.some((entry) => entry.name === column)) {
+        throw invalidInput(`dataRef 中不存在表格字段: ${column}`);
+      }
+    }
+    panels.push({
+      ...panel,
+      columns,
+      rows: resolved.rawRows.map((row) => columns.map((column) => serializeCell(row[column]))),
+      lineage: [resolved.provenance]
+    });
+  }
+
+  const kpis = [];
+  for (const kpi of input.kpis) {
+    let value = kpi.value;
+    let change = kpi.change;
+    if (kpi.valueRef) {
+      const resolved = await resolveSpreadsheetValueRef(workspace, kpi.valueRef, valueCache);
+      value = resolved.value;
+      lineage.push(resolved.provenance);
+    }
+    if (kpi.changeRef) {
+      const resolved = await resolveSpreadsheetValueRef(workspace, kpi.changeRef, valueCache);
+      change = resolved.value;
+      lineage.push(resolved.provenance);
+    }
+    kpis.push({ label: kpi.label, value, change, tone: kpi.tone });
+  }
+
+  const analysisIds = new Set(lineage.map((item) => item.analysisId).filter(Boolean));
+  if (analysisIds.size > 1) {
+    throw invalidInput("同一个正式看板不能混用多个 analysisId；请先在 spreadsheet_compute 中形成统一分析结果。 ");
+  }
+
+  return {
+    ...input,
+    kpis,
+    panels,
+    lineage: uniqueLineage(lineage)
+  };
+}
+
+function uniqueLineage(values) {
+  const seen = new Set();
+  return values.filter((value) => {
+    const key = `${value.analysisId}:${value.resultId}:${value.dataHash}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
   });
 }
 

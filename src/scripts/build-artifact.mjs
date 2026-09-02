@@ -85,6 +85,7 @@ async function readFiles(directory, root = directory) {
   const entries = await fs.readdir(directory, { withFileTypes: true });
   const files = [];
   for (const entry of entries) {
+    if (entry.name === "__pycache__" || entry.name.endsWith(".pyc")) continue;
     const absolutePath = path.join(directory, entry.name);
     if (entry.isDirectory()) {
       files.push(...await readFiles(absolutePath, root));
