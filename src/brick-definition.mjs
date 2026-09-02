@@ -16,7 +16,7 @@ import { fileURLToPath } from "node:url";
 
 const BRICK_ID = "agent-tool";
 const BRICK_NAME = "Agent Tool";
-const BRICK_VERSION = "0.15.0";
+const BRICK_VERSION = "0.16.0";
 const BRICK_KIND = "tool";
 
 const toolServiceCapability = createBrickCapability({
@@ -142,6 +142,15 @@ const dashboardCapability = createBrickCapability({
   optional: true
 });
 
+const spreadsheetAnalysisCapability = createBrickCapability({
+  id: "agent-tool.spreadsheet-analysis",
+  name: "Deterministic Spreadsheet Analysis Tools",
+  type: "tool",
+  description: "检查 XLSX/XLSM/CSV/TSV，执行 Decimal 聚合和联接，并通过确定性质量门验证数据闭环。",
+  requires: ["node-runtime", "python-runtime"],
+  optional: true
+});
+
 const toolProviderCapability = createBrickCapability({
   id: "agent-tool.provider-composition",
   name: "Tool Provider Composition",
@@ -204,6 +213,7 @@ export const brickDefinition = createBrickDefinition({
     playwrightBrowsersCapability,
     visualizationCapability,
     dashboardCapability,
+    spreadsheetAnalysisCapability,
     toolProviderCapability
   ],
   configSchema: {

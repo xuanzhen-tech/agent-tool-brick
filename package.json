@@ -1,6 +1,6 @@
 {
   "name": "@xuanzhen-tech/agent-tool-brick",
-  "version": "0.15.0",
+  "version": "0.16.0",
   "description": "Agent tool execution brick with a local tool service boundary.",
   "type": "module",
   "repository": {
@@ -19,7 +19,8 @@
     "src/cli.mjs",
     "src/index.mjs",
     "src/brick-definition.mjs",
-    "src/main"
+    "src/main",
+    "docs"
   ],
   "publishConfig": {
     "registry": "https://npm.pkg.github.com"
@@ -28,10 +29,11 @@
     "build:artifact": "node src/scripts/build-artifact.mjs",
     "create:descriptor": "node src/scripts/create-descriptor.mjs",
     "pack:dry-run": "npm pack --dry-run",
+    "prepack": "node src/scripts/clean-python-cache.mjs",
     "publish:artifact": "node src/scripts/publish-artifact.mjs",
     "publish:artifact:placeholder": "node src/scripts/publish-artifact-placeholder.mjs",
     "publish:npm": "npm publish",
-    "release:local": "npm run smoke:cli && npm run smoke:contract && npm run smoke:tools && npm run smoke:tool-results && npm run smoke:ecommerce-images && npm run smoke:ecommerce-videos && npm run smoke:visualizations && npm run smoke:server && npm run build:artifact && npm run create:descriptor && npm run publish:artifact:placeholder && npm run verify && npm run pack:dry-run",
+    "release:local": "npm run smoke:cli && npm run smoke:contract && npm run smoke:tools && npm run smoke:tool-results && npm run smoke:ecommerce-images && npm run smoke:ecommerce-videos && npm run smoke:visualizations && npm run smoke:spreadsheets && npm run smoke:server && npm run build:artifact && npm run create:descriptor && npm run publish:artifact:placeholder && npm run verify && npm run pack:dry-run",
     "smoke:agent-cli-runtime-integration": "node src/scripts/smoke-agent-cli-runtime-integration.mjs",
     "smoke:agent-cli-tool-result-recovery": "node src/scripts/smoke-agent-cli-tool-result-recovery.mjs",
     "smoke:agent-cli-gateway-kimi": "node src/scripts/smoke-agent-cli-gateway-kimi.mjs",
@@ -48,7 +50,10 @@
     "smoke:ecommerce-videos": "node src/scripts/smoke-ecommerce-videos.mjs",
     "smoke:ecommerce-images:real": "node src/scripts/smoke-ecommerce-images-real.mjs",
     "smoke:server": "node src/scripts/smoke-server.mjs",
+    "smoke:spreadsheets": "node src/scripts/smoke-spreadsheets.mjs",
     "smoke:agent-cli-integration": "node scripts/smoke-visualization-agent-integration.mjs",
+    "smoke:agent-cli-spreadsheet-real": "node scripts/smoke-spreadsheet-agent-real.mjs",
+    "smoke:agent-cli-spreadsheet-integration": "node scripts/smoke-spreadsheet-agent-integration.mjs",
     "smoke:tools": "node src/scripts/smoke-tools.mjs",
     "smoke:tool-results": "node src/scripts/smoke-tool-results.mjs",
     "smoke:visualizations": "node src/scripts/smoke-visualizations.mjs",

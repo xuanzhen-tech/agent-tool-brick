@@ -126,6 +126,8 @@ async function validateRuntimeArtifactIfPresent() {
     "src/main/shell-runtime.mjs",
     "src/main/runtime-dependency-config.mjs",
     "src/main/search-runtime.mjs",
+    "src/main/spreadsheet-runtime.mjs",
+    "src/main/spreadsheet-worker.py",
     "src/main/terminal-runtime.mjs",
     "src/main/tool-contract.mjs",
     "src/main/tool-result-compression.mjs",
@@ -157,7 +159,9 @@ async function validateRuntimeArtifactIfPresent() {
       normalized.includes("desktop-shell") ||
       normalized.endsWith("node.exe") ||
       normalized.endsWith("python.exe") ||
-      normalized.endsWith("rg.exe")
+      normalized.endsWith("rg.exe") ||
+      normalized.includes("__pycache__") ||
+      normalized.endsWith(".pyc")
     ) {
       throw new Error(`Runtime artifact contains forbidden path: ${file}`);
     }

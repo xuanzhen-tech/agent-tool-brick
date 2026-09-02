@@ -6,6 +6,7 @@
 
 - [Memory Tool Boundary](docs/memory-tool-boundary.md)
 - [Tool Provider 对接合同](docs/tool-provider-contract.md)
+- [表格计算与数据闭环](docs/spreadsheet-data-closure.md)
 
 ## 能力边界
 
@@ -28,6 +29,7 @@
 - 透传产品注入的 Node 包环境，让 `run_shell` / `exec_command` 可以使用产品组装的能力
 - 通过注入的 `playwright-browsers` 为子进程设置 Playwright Chromium 缓存路径
 - 内置但按需选择的 `visualization_create_chart` 和 `visualization_create_dashboard`
+- 通过注入的 `python-runtime` 提供默认隐藏的表格检查、确定性计算和质量门工具
 - 通过 `toolProviders` 组合演示文稿等复杂能力，而不让 AgentCli 感知内部实现
 
 本积木不负责：
@@ -102,6 +104,12 @@ const agentTool = new AgentTool({
   tools: ["run_shell", "visualization_create_chart", "visualization_create_dashboard"]
 });
 ```
+
+需要处理 XLSX、XLSM、CSV 或 TSV 时，产品只需在同一白名单中加入
+`spreadsheet_inspect`、`spreadsheet_compute`、`spreadsheet_validate`。三者不会改变
+`new AgentTool()` 的旧默认工具面；计算结果保存在 `temp/spreadsheets/`，正式图表仍写入
+`outputs/visualizations/`。完整组合方式和状态合同见
+[表格计算与数据闭环](docs/spreadsheet-data-closure.md)。
 
 ## 电商图片工具
 
@@ -353,6 +361,9 @@ AGENT_TOOL_RESULT_COMPRESSION
 `AGENT_TOOL_RG_BIN` 是可选项。缺少 rg 时，`workspace_search` 不暴露，diagnostics 给出 warn。
 
 `AGENT_TOOL_PYTHON_BIN` 是可选项。配置后，`run_shell` 和 `exec_command` 会把 `executable: "python"`、`"python3"` 或 `"py"` 解析到注入的私有 Python runtime；diagnostics 会验证该 runtime 能导入声明的通用依赖。
+
+表格工具同样使用这个注入的 Python runtime，并要求其中包含 `openpyxl`。产品不需要传入
+新的表格参数、公式引擎或数据库；未注入 Python runtime 时，三个表格工具不会暴露。
 
 `AGENT_TOOL_NODE_PACKAGE_PATHS` / `AGENT_TOOL_NODE_IMPORT_REGISTERS` / `AGENT_TOOL_NODE_OPTIONS` 来自产品注入的 `node-package` runtime dependency。它们用于让 `run_shell` 和 `exec_command` 的 Node 子进程解析产品包内的 JS 依赖，例如产品侧安装的 `playwright`。
 

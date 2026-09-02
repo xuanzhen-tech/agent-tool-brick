@@ -29,6 +29,9 @@ import {
   SKILL_FIND_TOOL,
   SKILL_REMOVE_TOOL,
   SKILL_RESOURCE_TOOL,
+  SPREADSHEET_COMPUTE_TOOL,
+  SPREADSHEET_INSPECT_TOOL,
+  SPREADSHEET_VALIDATE_TOOL,
   TOOL_RESULT_READ_TOOL,
   TOOL_RESULT_SEARCH_TOOL,
   VISUALIZATION_CREATE_CHART_TOOL,
@@ -45,6 +48,11 @@ import { executeWorkspaceSearch, isRgAvailable } from "./search-runtime.mjs";
 import { executeSkillResource } from "./skill-resource-runtime.mjs";
 import { executeSkillCreate } from "./skill-create-runtime.mjs";
 import { executeSkillRemove } from "./skill-remove-runtime.mjs";
+import {
+  executeSpreadsheetCompute,
+  executeSpreadsheetInspect,
+  executeSpreadsheetValidate
+} from "./spreadsheet-runtime.mjs";
 import { createTerminalSessionManager } from "./terminal-runtime.mjs";
 import { compressToolExecutionResult } from "./tool-result-compression.mjs";
 import { createToolResultStore } from "./tool-result-store.mjs";
@@ -68,6 +76,9 @@ const BUILTIN_TOOL_NAMES = new Set([
   SKILL_REMOVE_TOOL.name,
   SKILL_ACTIVATE_TOOL.name,
   SKILL_RESOURCE_TOOL.name,
+  SPREADSHEET_INSPECT_TOOL.name,
+  SPREADSHEET_COMPUTE_TOOL.name,
+  SPREADSHEET_VALIDATE_TOOL.name,
   TOOL_RESULT_READ_TOOL.name,
   TOOL_RESULT_SEARCH_TOOL.name,
   WEB_SEARCH_TOOL.name,
@@ -182,6 +193,12 @@ export async function createToolRegistry(config, options = {}) {
     addTool(ECOMMERCE_VIDEO_CANCEL_TOOL, (call, _currentConfig, signal) => ecommerceVideoRuntime.cancel({ ...call, signal }));
     addTool(ECOMMERCE_VIDEO_RETRY_TOOL, (call, _currentConfig, signal) => ecommerceVideoRuntime.retry({ ...call, signal }));
     addTool(ECOMMERCE_VIDEO_LIST_TOOL, (call, _currentConfig, signal) => ecommerceVideoRuntime.list({ ...call, signal }));
+  }
+
+  if (config.pythonBin) {
+    addTool(SPREADSHEET_INSPECT_TOOL, executeSpreadsheetInspect);
+    addTool(SPREADSHEET_COMPUTE_TOOL, executeSpreadsheetCompute);
+    addTool(SPREADSHEET_VALIDATE_TOOL, executeSpreadsheetValidate);
   }
 
   addTool(VISUALIZATION_CREATE_CHART_TOOL, executeVisualizationCreateChart);
@@ -481,7 +498,9 @@ function createExecutionFailureResult(call, signal, error) {
   const code = interrupted
     ? "interrupted"
     : typeof error?.code === "string" && (
-      error.code.startsWith("ecommerce_image_") || error.code.startsWith("tool_result_")
+      error.code.startsWith("ecommerce_image_") ||
+      error.code.startsWith("tool_result_") ||
+      error.code.startsWith("spreadsheet_")
     )
       ? error.code
       : "tool_execution_failed";

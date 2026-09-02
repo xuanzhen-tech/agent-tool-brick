@@ -1242,16 +1242,289 @@ export const ECOMMERCE_IMAGE_LIST_TOOL = {
   cancelable: false
 };
 
+export const SPREADSHEET_INSPECT_TOOL = {
+  name: "spreadsheet_inspect",
+  description: "检查 workspace 内 XLSX、XLSM、CSV 或 TSV 的真实结构，生成带来源哈希的 analysisId、稳定 tableId、字段画像和样本。表格计算前必须先使用本工具；存在多个区域或表头歧义时，不得自行猜测。",
+  defaultVisible: false,
+  schema: {
+    type: "function",
+    function: {
+      name: "spreadsheet_inspect",
+      description: "确定性检查表格结构。path 必须位于当前 workspace；返回的 tableId 是后续 spreadsheet_compute 的唯一表范围依据。公式缓存只会标记，不会被信任为权威金额。",
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        required: ["path"],
+        properties: {
+          path: {
+            type: "string",
+            description: "workspace 相对或内部绝对路径，通常来自 uploads/；支持 xlsx、xlsm、csv、tsv。"
+          },
+          sheets: {
+            type: "array",
+            maxItems: 50,
+            items: { type: "string" },
+            description: "可选工作表白名单。CSV/TSV 的工作表固定名为 data。"
+          }
+        }
+      }
+    }
+  },
+  permissions: ["workspace.read", "workspace.temp.write"],
+  timeoutMs: 120_000,
+  cancelable: true
+};
+
+export const SPREADSHEET_COMPUTE_TOOL = {
+  name: "spreadsheet_compute",
+  description: "基于 spreadsheet_inspect 返回的 analysisId/tableId 做确定性筛选、联接、分组、Decimal 聚合和安全派生指标。正式金额、比率、汇总和图表数据应来自本工具，不能由模型心算。",
+  defaultVisible: false,
+  schema: {
+    type: "function",
+    function: {
+      name: "spreadsheet_compute",
+      description: "执行最多 20 个声明式查询并返回 resultId/dataRef。公式列不能作为权威输入；缺失值默认失败，分母为零返回 not_computable。",
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        required: ["analysisId", "queries"],
+        properties: {
+          analysisId: { type: "string", description: "spreadsheet_inspect 返回的 analysisId。" },
+          queries: {
+            type: "array",
+            minItems: 1,
+            maxItems: 20,
+            items: {
+              type: "object",
+              additionalProperties: false,
+              required: ["id", "tableId"],
+              properties: {
+                id: { type: "string", description: "本次调用内唯一的查询名称。" },
+                tableId: { type: "string", description: "inspect 返回的明确 tableId。" },
+                columns: {
+                  type: "array",
+                  maxItems: 512,
+                  items: { type: "string" },
+                  description: "选择原始字段的行结果；使用时不能同时提供 groupBy、measures 或 derivedMetrics。"
+                },
+                filters: {
+                  type: "array",
+                  maxItems: 100,
+                  items: {
+                    type: "object",
+                    additionalProperties: false,
+                    required: ["column", "operator"],
+                    properties: {
+                      column: { type: "string" },
+                      operator: { type: "string", enum: ["eq", "neq", "gt", "gte", "lt", "lte", "in", "not_in", "is_null", "not_null"] },
+                      value: { description: "eq/neq/gt/gte/lt/lte 的比较值。" },
+                      values: { type: "array", description: "in/not_in 的比较值数组。", items: {} }
+                    }
+                  }
+                },
+                joins: {
+                  type: "array",
+                  maxItems: 5,
+                  items: {
+                    type: "object",
+                    additionalProperties: false,
+                    required: ["tableId", "leftColumns", "rightColumns", "cardinality"],
+                    properties: {
+                      tableId: { type: "string", description: "同一 analysisId 内的右表 tableId。" },
+                      type: { type: "string", enum: ["left", "inner"], description: "默认 left。" },
+                      leftColumns: { type: "array", minItems: 1, maxItems: 8, items: { type: "string" } },
+                      rightColumns: { type: "array", minItems: 1, maxItems: 8, items: { type: "string" } },
+                      cardinality: { type: "string", enum: ["one_to_one", "many_to_one", "one_to_many"] },
+                      summaryRowPolicy: { type: "string", enum: ["exclude", "include"], description: "右表检测到合计行时必须显式选择。" },
+                      prefix: { type: "string", description: "右表非键字段前缀，默认 join1、join2。" }
+                    }
+                  }
+                },
+                summaryRowPolicy: { type: "string", enum: ["exclude", "include"], description: "主表检测到合计/总计行时必须显式选择，通常为 exclude。" },
+                groupBy: { type: "array", maxItems: 64, items: { type: "string" } },
+                measures: {
+                  type: "array",
+                  maxItems: 100,
+                  items: {
+                    type: "object",
+                    additionalProperties: false,
+                    required: ["id", "operation"],
+                    properties: {
+                      id: { type: "string" },
+                      operation: { type: "string", enum: ["sum", "count", "countDistinct", "min", "max", "mean"] },
+                      column: { type: "string", description: "count 全行时可省略，其他聚合必须提供。" }
+                    }
+                  }
+                },
+                derivedMetrics: {
+                  type: "array",
+                  maxItems: 100,
+                  items: {
+                    type: "object",
+                    additionalProperties: false,
+                    required: ["id", "operation", "left", "right"],
+                    properties: {
+                      id: { type: "string" },
+                      operation: { type: "string", enum: ["add", "subtract", "multiply", "divide"] },
+                      left: { description: "聚合字段名或数值常量。" },
+                      right: { description: "聚合字段名或数值常量。" },
+                      zeroPolicy: { type: "string", enum: ["not_computable", "fail"], description: "默认 not_computable。" },
+                      scale: { type: "integer", minimum: 0, maximum: 12 },
+                      rounding: { type: "string", enum: ["half_up", "half_even"], description: "默认 half_up。" }
+                    }
+                  }
+                },
+                columnParsers: {
+                  type: "array",
+                  maxItems: 100,
+                  description: "字符串数字存在逗号等歧义时显式声明解析规则。",
+                  items: {
+                    type: "object",
+                    additionalProperties: false,
+                    required: ["column", "type"],
+                    properties: {
+                      tableId: { type: "string" },
+                      column: { type: "string" },
+                      type: { type: "string", enum: ["decimal", "integer", "string", "date"] },
+                      decimalSeparator: { type: "string", enum: [".", ","] },
+                      thousandsSeparator: { type: "string" },
+                      currencySymbols: { type: "array", maxItems: 10, items: { type: "string" } }
+                    }
+                  }
+                },
+                nullPolicy: { type: "string", enum: ["fail", "exclude"], description: "默认 fail，避免静默跳过缺失金额。" },
+                sort: {
+                  type: "array",
+                  maxItems: 20,
+                  items: {
+                    type: "object",
+                    additionalProperties: false,
+                    required: ["field"],
+                    properties: {
+                      field: { type: "string" },
+                      direction: { type: "string", enum: ["asc", "desc"] }
+                    }
+                  }
+                },
+                limit: { type: "integer", minimum: 1, maximum: 100000, description: "显式形成前 N 行受限结果；省略时若结果超过 10 万行会阻断并要求先筛选或聚合。受限结果不能用于完整质量门。" }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  permissions: ["workspace.read", "workspace.temp.write"],
+  timeoutMs: 120_000,
+  cancelable: true
+};
+
+export const SPREADSHEET_VALIDATE_TOOL = {
+  name: "spreadsheet_validate",
+  description: "对表格字段质量、金额恒等式、预算可行性和 ID/关键词集合关系做确定性质量门校验。必需检查失败时工具返回 failed，Agent 只能报告差异和补数需求，不得继续输出正式策略。",
+  defaultVisible: false,
+  schema: {
+    type: "function",
+    function: {
+      name: "spreadsheet_validate",
+      description: "校验同一 analysisId 下的原始 table 和 compute result。数值表达式只支持常量、结果单元格及 add/subtract/multiply/divide/sum 组合，不执行代码。",
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        required: ["analysisId", "resultIds", "checks"],
+        properties: {
+          analysisId: { type: "string" },
+          resultIds: { type: "array", maxItems: 100, items: { type: "string" }, description: "本次校验允许引用的 resultId 白名单。" },
+          checks: {
+            type: "array",
+            minItems: 1,
+            maxItems: 100,
+            items: {
+              type: "object",
+              additionalProperties: false,
+              required: ["id", "type"],
+              properties: {
+                id: { type: "string" },
+                type: { type: "string", enum: ["column_quality", "numeric_compare", "set_relation"] },
+                required: { type: "boolean", description: "默认 true；false 的失败只形成 warning。" },
+                target: {
+                  type: "object",
+                  additionalProperties: false,
+                  properties: { tableId: { type: "string" }, resultId: { type: "string" } },
+                  description: "column_quality 的检查对象。"
+                },
+                minimumRows: { type: "integer", minimum: 0 },
+                columns: {
+                  type: "array",
+                  maxItems: 100,
+                  items: {
+                    type: "object",
+                    additionalProperties: false,
+                    required: ["name"],
+                    properties: {
+                      name: { type: "string" },
+                      required: { type: "boolean" },
+                      notNull: { type: "boolean" },
+                      unique: { type: "boolean" },
+                      minCoverage: { type: "number", minimum: 0, maximum: 1, description: "非空值最低覆盖率，0-1。" },
+                      type: { type: "string", enum: ["string", "integer", "decimal", "number", "date", "boolean"] },
+                      forbiddenPattern: { type: "string", description: "该列禁止匹配的受限正则，例如在关键词列拒绝 ASIN 形态。" }
+                    }
+                  }
+                },
+                left: { type: "object", description: "数值表达式或集合操作数；可用 value、values、resultId/field/rowIndex、operation/operands。" },
+                right: { type: "object", description: "数值表达式或集合操作数；可用 value、values、resultId/field/rowIndex、operation/operands。" },
+                operator: { type: "string", enum: ["eq", "lte", "gte"] },
+                relation: { type: "string", enum: ["subset", "equal"] },
+                absoluteTolerance: { description: "数值相等的绝对容差，默认 0；货币通常使用 0.01。" },
+                relativeTolerance: { description: "数值相等的相对容差，默认 0。" }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  permissions: ["workspace.read", "workspace.temp.write"],
+  timeoutMs: 120_000,
+  cancelable: true
+};
+
+function spreadsheetDataRefSchema(description) {
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: ["schemaVersion", "analysisId", "resultId"],
+    properties: {
+      schemaVersion: { type: "string", enum: ["agent-spreadsheet.data-ref.v1"] },
+      analysisId: { type: "string" },
+      resultId: { type: "string" }
+    },
+    description
+  };
+}
+
+function spreadsheetValueRefSchema(description) {
+  const schema = spreadsheetDataRefSchema(description);
+  schema.required = [...schema.required, "field"];
+  schema.properties = {
+    ...schema.properties,
+    rowIndex: { type: "integer", minimum: 0, description: "结果行下标，默认 0。" },
+    field: { type: "string", description: "要读取的结果字段。" }
+  };
+  return schema;
+}
+
 // 可视化工具默认不进入 new AgentTool() 的旧行为。产品需要在 tools 白名单中
 // 明确选择它们，才会让模型看到这些数据处理和文件输出能力。
 export const VISUALIZATION_CREATE_CHART_TOOL = {
   name: "visualization_create_chart",
-  description: "使用受控 Vega-Lite 声明和内联表格数据生成图表。会把 JSON、SVG、PNG 写入当前 workspace 的 outputs/visualizations/，并返回可供界面直接渲染的 artifact；不执行任意 HTML 或 JavaScript。",
+  description: "使用受控 Vega-Lite 声明和内联表格数据或 spreadsheet_compute 的 dataRef 生成图表。会把 JSON、SVG、PNG 写入当前 workspace 的 outputs/visualizations/，并返回可供界面直接渲染的 artifact；不执行任意 HTML 或 JavaScript。",
   schema: {
     type: "function",
     function: {
       name: "visualization_create_chart",
-      description: "创建单个数据图表。spec 必须是纯 Vega-Lite 声明式对象，data 必须是对象数组；支持 fold、aggregate、filter、calculate 等受控数据整形，禁止 URL、远端数据、信号、lookup、任意脚本和 HTML。成功后输出固定在 workspace 的 outputs/visualizations/。",
+      description: "创建单个数据图表。spec 必须是纯 Vega-Lite 声明式对象；data 与 dataRef 互斥。正式表格分析应优先引用 spreadsheet_compute 的 dataRef，避免重新复制或计算数字。禁止 URL、远端数据、信号、lookup、任意脚本和 HTML。",
       parameters: {
         type: "object",
         additionalProperties: false,
@@ -1259,7 +1532,8 @@ export const VISUALIZATION_CREATE_CHART_TOOL = {
         properties: {
           title: { type: "string", description: "图表标题。" },
           spec: { type: "object", description: "Vega-Lite v5 声明式图表 spec。可使用受控 transform（如 fold、aggregate、filter、calculate）；不要使用 url、signal、expr 或 lookup。" },
-          data: { type: "array", items: { type: "object" }, description: "可选的内联对象数组。提供时会覆盖 spec.data。" }
+          data: { type: "array", items: { type: "object" }, description: "兼容用内联对象数组。提供时会覆盖 spec.data。" },
+          dataRef: spreadsheetDataRefSchema("spreadsheet_compute 返回的 canonical 数据引用；与 data 互斥。")
         }
       }
     }
@@ -1272,7 +1546,7 @@ export const VISUALIZATION_CREATE_CHART_TOOL = {
 
 export const VISUALIZATION_CREATE_DASHBOARD_TOOL = {
   name: "visualization_create_dashboard",
-  description: "使用受控 KPI、洞察、图表、表格和文本面板生成结构化 BI 看板。会输出 dashboard JSON、静态 HTML、图表 SVG/PNG 到 workspace 的 outputs/visualizations/，并返回结构化 artifact。",
+  description: "使用受控 KPI、洞察、图表、表格和文本面板生成结构化 BI 看板。图表、表格和 KPI 可直接引用 spreadsheet_compute 的 canonical 结果，避免不同章节重复计算。",
   schema: {
     type: "function",
     function: {
@@ -1285,9 +1559,48 @@ export const VISUALIZATION_CREATE_DASHBOARD_TOOL = {
         properties: {
           title: { type: "string", description: "看板标题。" },
           summary: { type: "string", description: "可选的看板摘要。" },
-          kpis: { type: "array", description: "可选 KPI 数组，每项包含 label、value、change、tone。", items: { type: "object" } },
+          kpis: {
+            type: "array",
+            maxItems: 20,
+            description: "可选 KPI 数组；value/valueRef、change/changeRef 分别互斥。",
+            items: {
+              type: "object",
+              additionalProperties: false,
+              required: ["label"],
+              properties: {
+                label: { type: "string" },
+                value: { type: "string" },
+                valueRef: spreadsheetValueRefSchema("从 spreadsheet_compute 结果读取 KPI 值。"),
+                change: { type: "string" },
+                changeRef: spreadsheetValueRefSchema("从 spreadsheet_compute 结果读取 KPI 变化值。"),
+                tone: { type: "string", enum: ["neutral", "positive", "negative"] }
+              }
+            }
+          },
           insights: { type: "array", description: "可选关键洞察文本数组。", items: { type: "string" } },
-          panels: { type: "array", minItems: 1, description: "面板数组。chart 需要 spec 和可选 data；table 需要 columns、rows；text 需要 content。", items: { type: "object" } }
+          panels: {
+            type: "array",
+            minItems: 1,
+            maxItems: 12,
+            description: "面板数组。chart 必须提供 spec，并使用 data 或 dataRef；table 使用 rows 或 dataRef；text 使用 content。",
+            items: {
+              type: "object",
+              additionalProperties: false,
+              required: ["kind"],
+              properties: {
+                id: { type: "string" },
+                kind: { type: "string", enum: ["chart", "table", "text"] },
+                title: { type: "string" },
+                description: { type: "string" },
+                spec: { type: "object", description: "chart 面板的受控 Vega-Lite spec。" },
+                data: { type: "array", items: { type: "object" }, description: "chart 的兼容内联数据；与 dataRef 互斥。" },
+                dataRef: spreadsheetDataRefSchema("chart/table 面板的 canonical 数据引用。"),
+                columns: { type: "array", items: { type: "string" }, description: "table 显示字段；dataRef 模式省略时使用全部结果字段。" },
+                rows: { type: "array", items: {}, description: "table 的兼容内联数据；与 dataRef 互斥。" },
+                content: { type: "string", description: "text 面板正文。" }
+              }
+            }
+          }
         }
       }
     }

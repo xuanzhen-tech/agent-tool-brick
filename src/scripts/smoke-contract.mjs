@@ -27,17 +27,21 @@ import {
   EXEC_COMMAND_TOOL,
   IMAGE_PRESENT_TOOL,
   RUN_SHELL_TOOL,
+  SPREADSHEET_COMPUTE_TOOL,
+  SPREADSHEET_INSPECT_TOOL,
+  SPREADSHEET_VALIDATE_TOOL,
   SKILL_CREATE_TOOL,
   SKILL_FIND_TOOL,
   SKILL_REMOVE_TOOL,
   SKILL_RESOURCE_TOOL,
+  VISUALIZATION_CREATE_DASHBOARD_TOOL,
   WRITE_STDIN_TOOL
 } from "../main/tool-definitions.mjs";
 import { createToolResult } from "../main/tool-contract.mjs";
 
 assert.equal(brickDefinition.id, "agent-tool");
 assert.equal(brickDefinition.kind, "tool");
-assert.equal(brickDefinition.version, "0.15.0");
+assert.equal(brickDefinition.version, "0.16.0");
 assert.equal(validateBrickDefinition(brickDefinition).ok, true);
 assert.equal(brickDefinition.runtimeDependencies.some((item) => item.type === "node-runtime" && item.required === true), true);
 assert.equal(brickDefinition.runtimeDependencies.some((item) => item.slot === "tool:rg" && item.required === false), true);
@@ -54,6 +58,7 @@ assert.equal(brickDefinition.capabilities.some((item) => item.id === "agent-tool
 assert.equal(brickDefinition.capabilities.some((item) => item.id === "agent-tool.playwright-browsers-env"), true);
 assert.equal(brickDefinition.capabilities.some((item) => item.id === "agent-tool.data-visualization"), true);
 assert.equal(brickDefinition.capabilities.some((item) => item.id === "agent-tool.structured-dashboard"), true);
+assert.equal(brickDefinition.capabilities.some((item) => item.id === "agent-tool.spreadsheet-analysis"), true);
 assert.equal(brickDefinition.capabilities.some((item) => item.id === "agent-tool.provider-composition"), true);
 
 const launchConfig = createAgentToolLaunchConfig({
@@ -283,6 +288,15 @@ assert.equal("prompt" in IMAGE_PRESENT_TOOL.schema.function.parameters.propertie
 assert.match(IMAGE_PRESENT_TOOL.description, /原生看图/);
 assert.match(IMAGE_PRESENT_TOOL.description, /不调用其它模型生成文字描述/);
 assert.match(IMAGE_PRESENT_TOOL.description, /workspace 相对路径/);
+assert.equal(SPREADSHEET_INSPECT_TOOL.defaultVisible, false);
+assert.equal(SPREADSHEET_COMPUTE_TOOL.defaultVisible, false);
+assert.equal(SPREADSHEET_VALIDATE_TOOL.defaultVisible, false);
+assert.deepEqual(SPREADSHEET_INSPECT_TOOL.schema.function.parameters.required, ["path"]);
+assert.deepEqual(SPREADSHEET_COMPUTE_TOOL.schema.function.parameters.required, ["analysisId", "queries"]);
+assert.deepEqual(SPREADSHEET_VALIDATE_TOOL.schema.function.parameters.required, ["analysisId", "resultIds", "checks"]);
+const dashboardParameters = VISUALIZATION_CREATE_DASHBOARD_TOOL.schema.function.parameters;
+assert.deepEqual(dashboardParameters.properties.kpis.items.properties.valueRef.required, ["schemaVersion", "analysisId", "resultId", "field"]);
+assert.deepEqual(dashboardParameters.properties.panels.items.properties.dataRef.required, ["schemaVersion", "analysisId", "resultId"]);
 
 const manifest = createAgentToolManifest({
   baseUrl: "http://127.0.0.1:8791",

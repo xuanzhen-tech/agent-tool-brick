@@ -24,6 +24,14 @@ jobs:
           registry-url: https://npm.pkg.github.com
           scope: "@xuanzhen-tech"
 
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install spreadsheet runtime dependencies
+        run: python -m pip install openpyxl==3.1.5
+
       - name: Install dependencies
         run: npm ci
         env:
@@ -37,11 +45,19 @@ jobs:
           node --check src/scripts/smoke-ecommerce-images.mjs
           node --check src/scripts/smoke-ecommerce-videos.mjs
 
+      - name: Validate spreadsheet runtimes
+        run: |
+          node --check src/main/spreadsheet-runtime.mjs
+          node --check src/main/visualization-runtime.mjs
+          node --check src/scripts/smoke-spreadsheets.mjs
+          python -m py_compile src/main/spreadsheet-worker.py src/scripts/create-spreadsheet-fixtures.py
+
       - name: Run contract smoke tests
         run: |
           npm run smoke:contract
           npm run smoke:ecommerce-images
           npm run smoke:ecommerce-videos
+          npm run smoke:spreadsheets
           npm run smoke:tools
 
       - name: Verify package
