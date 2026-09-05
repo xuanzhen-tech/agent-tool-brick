@@ -41,7 +41,7 @@ import { createToolResult } from "../main/tool-contract.mjs";
 
 assert.equal(brickDefinition.id, "agent-tool");
 assert.equal(brickDefinition.kind, "tool");
-assert.equal(brickDefinition.version, "0.16.0");
+assert.equal(brickDefinition.version, "0.17.0");
 assert.equal(validateBrickDefinition(brickDefinition).ok, true);
 assert.equal(brickDefinition.runtimeDependencies.some((item) => item.type === "node-runtime" && item.required === true), true);
 assert.equal(brickDefinition.runtimeDependencies.some((item) => item.slot === "tool:rg" && item.required === false), true);
@@ -291,8 +291,21 @@ assert.match(IMAGE_PRESENT_TOOL.description, /workspace 相对路径/);
 assert.equal(SPREADSHEET_INSPECT_TOOL.defaultVisible, false);
 assert.equal(SPREADSHEET_COMPUTE_TOOL.defaultVisible, false);
 assert.equal(SPREADSHEET_VALIDATE_TOOL.defaultVisible, false);
-assert.deepEqual(SPREADSHEET_INSPECT_TOOL.schema.function.parameters.required, ["path"]);
+assert.deepEqual(SPREADSHEET_INSPECT_TOOL.schema.function.parameters.required, ["sources"]);
+assert.equal(SPREADSHEET_INSPECT_TOOL.schema.function.parameters.properties.path, undefined);
+assert.equal(SPREADSHEET_INSPECT_TOOL.schema.function.parameters.properties.sources.maxItems, 100);
 assert.deepEqual(SPREADSHEET_COMPUTE_TOOL.schema.function.parameters.required, ["analysisId", "queries"]);
+assert.equal(SPREADSHEET_COMPUTE_TOOL.schema.function.parameters.properties.sourceDecisions.maxItems, 100);
+assert.equal(SPREADSHEET_COMPUTE_TOOL.schema.function.parameters.properties.queries.items.properties.columns.minItems, 1);
+assert.equal(SPREADSHEET_COMPUTE_TOOL.schema.function.parameters.properties.queries.items.properties.measures.minItems, 1);
+assert.match(SPREADSHEET_COMPUTE_TOOL.schema.function.parameters.properties.queries.items.properties.derivedMetrics.description, /不是逐行计算列/);
+assert.match(SPREADSHEET_VALIDATE_TOOL.schema.function.parameters.properties.resultIds.description, /每个 resultId/);
+assert.equal(
+  SPREADSHEET_VALIDATE_TOOL.schema.function.parameters.properties.checks.items.oneOf.some(
+    (schema) => schema.properties.type.enum.includes("source_coverage")
+  ),
+  true
+);
 assert.deepEqual(SPREADSHEET_VALIDATE_TOOL.schema.function.parameters.required, ["analysisId", "resultIds", "checks"]);
 const dashboardParameters = VISUALIZATION_CREATE_DASHBOARD_TOOL.schema.function.parameters;
 assert.deepEqual(dashboardParameters.properties.kpis.items.properties.valueRef.required, ["schemaVersion", "analysisId", "resultId", "field"]);

@@ -1244,34 +1244,44 @@ export const ECOMMERCE_IMAGE_LIST_TOOL = {
 
 export const SPREADSHEET_INSPECT_TOOL = {
   name: "spreadsheet_inspect",
-  description: "检查 workspace 内 XLSX、XLSM、CSV 或 TSV 的真实结构，生成带来源哈希的 analysisId、稳定 tableId、字段画像和样本。表格计算前必须先使用本工具；存在多个区域或表头歧义时，不得自行猜测。",
+  description: "检查 workspace 内一个或多个 XLSX、XLSM、CSV、TSV 的真实结构，生成统一 analysisId、来源集合快照、稳定 tableId、重复/重叠证据和字段画像。ZIP 先用 run_shell 解压到 temp/，再通过 sources 一次提交实际表格；不得把 ZIP 直接传给本工具。",
   defaultVisible: false,
   schema: {
     type: "function",
     function: {
       name: "spreadsheet_inspect",
-      description: "确定性检查表格结构。path 必须位于当前 workspace；返回的 tableId 是后续 spreadsheet_compute 的唯一表范围依据。公式缓存只会标记，不会被信任为权威金额。",
+      description: "确定性检查表格结构。始终使用 sources；单文件也只传一个来源元素。返回的 tableId 是后续 spreadsheet_compute 的唯一表范围依据。公式缓存只会标记，不会被信任为权威金额。",
       parameters: {
         type: "object",
         additionalProperties: false,
-        required: ["path"],
+        required: ["sources"],
         properties: {
-          path: {
-            type: "string",
-            description: "workspace 相对或内部绝对路径，通常来自 uploads/；支持 xlsx、xlsm、csv、tsv。"
-          },
-          sheets: {
+          sources: {
             type: "array",
-            maxItems: 50,
-            items: { type: "string" },
-            description: "可选工作表白名单。CSV/TSV 的工作表固定名为 data。"
+            minItems: 1,
+            maxItems: 100,
+            description: "解压后或其他多文件场景中的明确表格来源。不得传目录、glob 或 ZIP。",
+            items: {
+              type: "object",
+              additionalProperties: false,
+              required: ["path"],
+              properties: {
+                path: { type: "string", description: "workspace 内的实际表格文件路径。" },
+                sheets: {
+                  type: "array",
+                  maxItems: 50,
+                  items: { type: "string" },
+                  description: "该工作簿的可选工作表白名单。"
+                }
+              }
+            }
           }
         }
       }
     }
   },
   permissions: ["workspace.read", "workspace.temp.write"],
-  timeoutMs: 120_000,
+  timeoutMs: 300_000,
   cancelable: true
 };
 
@@ -1283,26 +1293,74 @@ export const SPREADSHEET_COMPUTE_TOOL = {
     type: "function",
     function: {
       name: "spreadsheet_compute",
-      description: "执行最多 20 个声明式查询并返回 resultId/dataRef。公式列不能作为权威输入；缺失值默认失败，分母为零返回 not_computable。",
+      description: "执行最多 20 个声明式查询并返回 resultId/dataRef。单表可继续使用 tableId；多表纵向合并使用 from.type=union，并显式声明字段映射。公式列不能作为权威输入。",
       parameters: {
         type: "object",
         additionalProperties: false,
         required: ["analysisId", "queries"],
         properties: {
           analysisId: { type: "string", description: "spreadsheet_inspect 返回的 analysisId。" },
+          sourceDecisions: {
+            type: "array",
+            maxItems: 100,
+            description: "仅当 inspect 返回 inspectionStatus=needs_review 时使用。sourceId 必须逐字复制 inspect.sources[].sourceId（形如 source-...），不能填写文件路径；ready/needs_selection 时省略。排除来源必须记录原因，供 source_coverage 校验。",
+            items: {
+              type: "object",
+              additionalProperties: false,
+              required: ["sourceId", "action"],
+              properties: {
+                sourceId: { type: "string", description: "inspect.sources[].sourceId；不要填写 path。" },
+                action: { type: "string", enum: ["include", "exclude"] },
+                reasonCode: { type: "string", enum: ["exact_duplicate", "out_of_scope", "unsupported_period", "corrupt_source", "superseded", "user_excluded", "other"] },
+                reason: { type: "string", description: "排除时必填的审计说明。" }
+              }
+            }
+          },
           queries: {
             type: "array",
             minItems: 1,
             maxItems: 20,
+            description: "每个 query 必须选择 columns 行结果，或选择 measures 聚合结果；两者不能同时出现。inspect 已提供表头和样本，不要提交空 query 探测结构。",
             items: {
               type: "object",
               additionalProperties: false,
-              required: ["id", "tableId"],
+              required: ["id"],
               properties: {
                 id: { type: "string", description: "本次调用内唯一的查询名称。" },
-                tableId: { type: "string", description: "inspect 返回的明确 tableId。" },
+                tableId: { type: "string", description: "兼容的单表入口；与 from 互斥。" },
+                from: {
+                  type: "object",
+                  description: "新的明确数据来源。type=table 选择单表；type=union 将多个同类表纵向合并。",
+                  properties: {
+                    type: { type: "string", enum: ["table", "union"] },
+                    tableId: { type: "string", description: "type=table 时必填。" },
+                    summaryRowPolicy: { type: "string", enum: ["exclude", "include"] },
+                    tables: {
+                      type: "array",
+                      minItems: 2,
+                      maxItems: 100,
+                      description: "type=union 时必填。每张表必须显式选择，字段不一致时必须提供 columnMap。",
+                      items: {
+                        type: "object",
+                        additionalProperties: false,
+                        required: ["tableId"],
+                        properties: {
+                          tableId: { type: "string" },
+                          columnMap: {
+                            type: "object",
+                            description: "来源字段到统一字段的映射；提供时只保留映射中的字段。",
+                            additionalProperties: { type: "string" }
+                          },
+                          summaryRowPolicy: { type: "string", enum: ["exclude", "include"] }
+                        }
+                      }
+                    }
+                  },
+                  required: ["type"]
+                },
                 columns: {
                   type: "array",
+                  minItems: 1,
                   maxItems: 512,
                   items: { type: "string" },
                   description: "选择原始字段的行结果；使用时不能同时提供 groupBy、measures 或 derivedMetrics。"
@@ -1336,7 +1394,7 @@ export const SPREADSHEET_COMPUTE_TOOL = {
                       rightColumns: { type: "array", minItems: 1, maxItems: 8, items: { type: "string" } },
                       cardinality: { type: "string", enum: ["one_to_one", "many_to_one", "one_to_many"] },
                       summaryRowPolicy: { type: "string", enum: ["exclude", "include"], description: "右表检测到合计行时必须显式选择。" },
-                      prefix: { type: "string", description: "右表非键字段前缀，默认 join1、join2。" }
+                      prefix: { type: "string", description: "右表非键字段前缀，默认 join1、join2。联接后的字段名固定为 <prefix>.<column>，例如 prefix=owners 时按 owners.owner 分组，不能写 owner、owners_owner 或 o_owner。" }
                     }
                   }
                 },
@@ -1344,7 +1402,9 @@ export const SPREADSHEET_COMPUTE_TOOL = {
                 groupBy: { type: "array", maxItems: 64, items: { type: "string" } },
                 measures: {
                   type: "array",
+                  minItems: 1,
                   maxItems: 100,
+                  description: "聚合指标数组。需要总额与派生总指标时，先在这里生成基础汇总字段。",
                   items: {
                     type: "object",
                     additionalProperties: false,
@@ -1358,7 +1418,9 @@ export const SPREADSHEET_COMPUTE_TOOL = {
                 },
                 derivedMetrics: {
                   type: "array",
+                  minItems: 1,
                   maxItems: 100,
+                  description: "仅对 measures 聚合后的字段计算安全派生指标，不能与 columns 行选择模式同时使用，也不是逐行计算列。例如先 sum 得到 gross_sum/cost_sum，再 subtract 得到 margin_total。",
                   items: {
                     type: "object",
                     additionalProperties: false,
@@ -1415,9 +1477,160 @@ export const SPREADSHEET_COMPUTE_TOOL = {
     }
   },
   permissions: ["workspace.read", "workspace.temp.write"],
-  timeoutMs: 120_000,
+  timeoutMs: 300_000,
   cancelable: true
 };
+
+function spreadsheetValidationCheckSchemas() {
+  const common = {
+    id: { type: "string", description: "本次调用内唯一的检查名称。" },
+    required: { type: "boolean", description: "默认 true；false 的失败只形成 warning。" }
+  };
+  return [
+    {
+      type: "object",
+      additionalProperties: false,
+      required: ["id", "type", "target"],
+      properties: {
+        ...common,
+        type: { type: "string", enum: ["column_quality"] },
+        target: {
+          oneOf: [
+            { type: "object", additionalProperties: false, required: ["tableId"], properties: { tableId: { type: "string" } } },
+            { type: "object", additionalProperties: false, required: ["resultId"], properties: { resultId: { type: "string" } } }
+          ],
+          description: "检查一个原始 tableId 或 canonical resultId。"
+        },
+        minimumRows: { type: "integer", minimum: 0 },
+        columns: {
+          type: "array",
+          maxItems: 100,
+          items: {
+            type: "object",
+            additionalProperties: false,
+            required: ["name"],
+            properties: {
+              name: { type: "string" },
+              required: { type: "boolean" },
+              notNull: { type: "boolean" },
+              unique: { type: "boolean" },
+              minCoverage: { type: "number", minimum: 0, maximum: 1 },
+              type: { type: "string", enum: ["string", "integer", "decimal", "number", "date", "boolean"] },
+              forbiddenPattern: { type: "string", description: "该列禁止匹配的受限正则。" }
+            }
+          }
+        }
+      }
+    },
+    {
+      type: "object",
+      additionalProperties: false,
+      required: ["id", "type", "left", "right", "operator"],
+      properties: {
+        ...common,
+        type: { type: "string", enum: ["numeric_compare"] },
+        left: spreadsheetNumericExpressionSchema("左侧数值表达式"),
+        right: spreadsheetNumericExpressionSchema("右侧数值表达式"),
+        operator: { type: "string", enum: ["eq", "lte", "gte"] },
+        absoluteTolerance: { description: "绝对容差，默认 0；货币通常使用 0.01。" },
+        relativeTolerance: { description: "相对容差，默认 0。" }
+      }
+    },
+    {
+      type: "object",
+      additionalProperties: false,
+      required: ["id", "type", "left", "right", "relation"],
+      properties: {
+        ...common,
+        type: { type: "string", enum: ["set_relation"] },
+        left: spreadsheetSetOperandSchema("左侧集合"),
+        right: spreadsheetSetOperandSchema("右侧集合"),
+        relation: { type: "string", enum: ["subset", "equal"] }
+      }
+    },
+    {
+      type: "object",
+      additionalProperties: false,
+      required: ["id", "type"],
+      properties: {
+        ...common,
+        type: { type: "string", enum: ["source_coverage"] },
+        resultIds: { type: "array", maxItems: 100, items: { type: "string" }, description: "省略时检查顶层 resultIds 中的全部结果。" },
+        requireAllSourcesAccountedFor: { type: "boolean", description: "默认 true。" },
+        allowFailedSources: { type: "boolean", description: "默认 false。" },
+        allowUnresolvedDuplicates: { type: "boolean", description: "默认 false。" },
+        allowUnresolvedOverlaps: { type: "boolean", description: "默认 false。" }
+      }
+    }
+  ];
+}
+
+function spreadsheetNumericExpressionSchema(label) {
+  return {
+    oneOf: [
+      spreadsheetNumericLiteralSchema(),
+      spreadsheetNumericCellSchema(),
+      {
+        type: "object",
+        additionalProperties: false,
+        required: ["operation", "operands"],
+        properties: {
+          operation: { type: "string", enum: ["sum", "add", "subtract", "multiply", "divide"] },
+          operands: {
+            type: "array",
+            minItems: 1,
+            maxItems: 20,
+            items: { oneOf: [spreadsheetNumericLiteralSchema(), spreadsheetNumericCellSchema()] },
+            description: "subtract/divide 必须恰好两个操作数；其他操作可包含多个。"
+          }
+        }
+      }
+    ],
+    description: `${label}，必须且只能使用一种形态：{value}、{resultId,field,rowIndex} 或 {operation,operands}。不要把 resultId/field 与 operation 写在同一对象；复杂派生值优先在 spreadsheet_compute.derivedMetrics 中生成后再引用。`
+  };
+}
+
+function spreadsheetNumericLiteralSchema() {
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: ["value"],
+    properties: { value: { description: "数值或十进制字符串常量。" } }
+  };
+}
+
+function spreadsheetNumericCellSchema() {
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: ["resultId", "field"],
+    properties: {
+      resultId: { type: "string" },
+      field: { type: "string" },
+      rowIndex: { type: "integer", minimum: 0, description: "默认 0；只能使用 compute 结果实际存在的行。" }
+    }
+  };
+}
+
+function spreadsheetSetOperandSchema(label) {
+  return {
+    oneOf: [
+      {
+        type: "object",
+        additionalProperties: false,
+        required: ["values"],
+        properties: { values: { type: "array", items: {} } }
+      },
+      {
+        type: "object",
+        additionalProperties: false,
+        required: ["resultId", "field"],
+        properties: { resultId: { type: "string" }, field: { type: "string" } }
+      }
+    ],
+    description: `${label}，使用内联 {values} 或结果列 {resultId,field}。`
+  };
+}
 
 export const SPREADSHEET_VALIDATE_TOOL = {
   name: "spreadsheet_validate",
@@ -1427,66 +1640,26 @@ export const SPREADSHEET_VALIDATE_TOOL = {
     type: "function",
     function: {
       name: "spreadsheet_validate",
-      description: "校验同一 analysisId 下的原始 table 和 compute result。数值表达式只支持常量、结果单元格及 add/subtract/multiply/divide/sum 组合，不执行代码。",
+      description: "校验同一 analysisId 下的来源覆盖、原始 table 和 compute result。数值表达式只支持常量、结果单元格及安全算术组合，不执行代码。",
       parameters: {
         type: "object",
         additionalProperties: false,
         required: ["analysisId", "resultIds", "checks"],
         properties: {
           analysisId: { type: "string" },
-          resultIds: { type: "array", maxItems: 100, items: { type: "string" }, description: "本次校验允许引用的 resultId 白名单。" },
+          resultIds: { type: "array", maxItems: 100, items: { type: "string" }, description: "本次校验允许引用的 resultId 白名单。checks 中 target、left、right 直接或在 operands 内引用的每个 resultId 都必须列在这里。" },
           checks: {
             type: "array",
             minItems: 1,
             maxItems: 100,
-            items: {
-              type: "object",
-              additionalProperties: false,
-              required: ["id", "type"],
-              properties: {
-                id: { type: "string" },
-                type: { type: "string", enum: ["column_quality", "numeric_compare", "set_relation"] },
-                required: { type: "boolean", description: "默认 true；false 的失败只形成 warning。" },
-                target: {
-                  type: "object",
-                  additionalProperties: false,
-                  properties: { tableId: { type: "string" }, resultId: { type: "string" } },
-                  description: "column_quality 的检查对象。"
-                },
-                minimumRows: { type: "integer", minimum: 0 },
-                columns: {
-                  type: "array",
-                  maxItems: 100,
-                  items: {
-                    type: "object",
-                    additionalProperties: false,
-                    required: ["name"],
-                    properties: {
-                      name: { type: "string" },
-                      required: { type: "boolean" },
-                      notNull: { type: "boolean" },
-                      unique: { type: "boolean" },
-                      minCoverage: { type: "number", minimum: 0, maximum: 1, description: "非空值最低覆盖率，0-1。" },
-                      type: { type: "string", enum: ["string", "integer", "decimal", "number", "date", "boolean"] },
-                      forbiddenPattern: { type: "string", description: "该列禁止匹配的受限正则，例如在关键词列拒绝 ASIN 形态。" }
-                    }
-                  }
-                },
-                left: { type: "object", description: "数值表达式或集合操作数；可用 value、values、resultId/field/rowIndex、operation/operands。" },
-                right: { type: "object", description: "数值表达式或集合操作数；可用 value、values、resultId/field/rowIndex、operation/operands。" },
-                operator: { type: "string", enum: ["eq", "lte", "gte"] },
-                relation: { type: "string", enum: ["subset", "equal"] },
-                absoluteTolerance: { description: "数值相等的绝对容差，默认 0；货币通常使用 0.01。" },
-                relativeTolerance: { description: "数值相等的相对容差，默认 0。" }
-              }
-            }
+            items: { oneOf: spreadsheetValidationCheckSchemas() }
           }
         }
       }
     }
   },
   permissions: ["workspace.read", "workspace.temp.write"],
-  timeoutMs: 120_000,
+  timeoutMs: 300_000,
   cancelable: true
 };
 

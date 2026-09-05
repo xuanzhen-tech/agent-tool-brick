@@ -139,3 +139,27 @@ sparse_sheet["A1"] = "id"
 sparse_sheet.cell(row=100_000, column=100, value="tail")
 sparse_workbook.save(uploads / "sparse-dimensions.xlsx")
 sparse_workbook.close()
+
+# 多来源 fixture 使用两个真实工作簿和不同语言表头，验证同一 analysis 下的
+# 跨文件 union、显式字段映射和跨文件 join。
+july_workbook = Workbook()
+july_sheet = july_workbook.active
+july_sheet.title = "Campaign"
+july_sheet.append(["date", "campaignId", "spend", "sales"])
+july_sheet.append(["2026-07-01", "A", 10.10, 100])
+july_sheet.append(["2026-07-02", "B", 20.20, 200])
+add_table(july_sheet, "JulyCampaignData", "A1:D3")
+july_path = uploads / "multi-july.xlsx"
+july_workbook.save(july_path)
+july_workbook.close()
+shutil.copyfile(july_path, uploads / "multi-july-copy.xlsx")
+
+august_workbook = Workbook()
+august_sheet = august_workbook.active
+august_sheet.title = "广告活动"
+august_sheet.append(["日期", "广告活动", "花费", "销售额"])
+august_sheet.append(["2026-07-15", "A", 5.05, 50])
+august_sheet.append(["2026-08-01", "C", 15.15, 150])
+add_table(august_sheet, "AugustCampaignData", "A1:D3")
+august_workbook.save(uploads / "multi-august.xlsx")
+august_workbook.close()

@@ -34,6 +34,11 @@ await fs.writeFile(
   "utf8"
 );
 await fs.writeFile(path.join(workspace, "uploads", "corrupt.xlsx"), "not-an-xlsx", "utf8");
+await fs.writeFile(
+  path.join(workspace, "uploads", "multi-owner.csv"),
+  "campaignId,owner\nA,team-1\nB,team-2\nC,team-1\n",
+  "utf8"
+);
 await fs.writeFile(path.join(externalRoot, "outside.csv"), "id,value\noutside,1\n", "utf8");
 const linkedDirectory = path.join(workspace, "uploads", "linked-outside");
 await fs.symlink(externalRoot, linkedDirectory, process.platform === "win32" ? "junction" : "dir");
@@ -68,6 +73,29 @@ try {
       "visualization_create_dashboard"
     ].sort()
   );
+  const inspectDefinition = tool.definitions.find((item) => item.function?.name === "spreadsheet_inspect");
+  const computeDefinition = tool.definitions.find((item) => item.function?.name === "spreadsheet_compute");
+  const validateDefinition = tool.definitions.find((item) => item.function?.name === "spreadsheet_validate");
+  assert.equal(inspectDefinition.function.parameters.properties.sources.maxItems, 100);
+  assert.deepEqual(inspectDefinition.function.parameters.required, ["sources"]);
+  assert.equal(inspectDefinition.function.parameters.properties.path, undefined);
+  assert.equal(computeDefinition.function.parameters.properties.sourceDecisions.maxItems, 100);
+  assert.match(computeDefinition.function.parameters.properties.sourceDecisions.description, /needs_review/);
+  assert.match(computeDefinition.function.parameters.properties.sourceDecisions.items.properties.sourceId.description, /不要填写 path/);
+  assert.deepEqual(computeDefinition.function.parameters.properties.queries.items.required, ["id"]);
+  assert.equal(computeDefinition.function.parameters.properties.queries.items.properties.columns.minItems, 1);
+  assert.equal(computeDefinition.function.parameters.properties.queries.items.properties.measures.minItems, 1);
+  assert.equal(
+    validateDefinition.function.parameters.properties.checks.items.oneOf.some(
+      (schema) => schema.properties.type.enum.includes("source_coverage")
+    ),
+    true
+  );
+  const numericCompareSchema = validateDefinition.function.parameters.properties.checks.items.oneOf.find(
+    (schema) => schema.properties.type.enum.includes("numeric_compare")
+  );
+  assert.equal(numericCompareSchema.required.includes("left"), true);
+  assert.equal(numericCompareSchema.properties.left.oneOf.length, 3);
 
   const inspected = await tool.execute("spreadsheet_inspect", { path: "uploads/advertising.xlsx" }, { workspace });
   assert.equal(inspected.status, "completed", inspected.content);
@@ -93,6 +121,141 @@ try {
   }, { workspace });
   assert.equal(mergedBlocked.status, "blocked", mergedBlocked.content);
   assert.equal(mergedBlocked.error.code, "spreadsheet_table_ambiguous");
+
+  const sourcePathAliasComputed = await tool.execute("spreadsheet_compute", {
+    analysisId: inspection.analysisId,
+    sourceDecisions: [{ sourceId: "uploads/advertising.xlsx", action: "include" }],
+    queries: [{
+      id: "source-path-alias-preview",
+      tableId: campaignTable.tableId,
+      columns: ["campaignId"],
+      limit: 8
+    }]
+  }, { workspace });
+  assert.equal(sourcePathAliasComputed.status, "completed", sourcePathAliasComputed.content);
+  const sourcePathAliasResult = JSON.parse(sourcePathAliasComputed.content).results[0];
+  assert.equal(sourcePathAliasResult.preview.length, 8);
+  assert.equal(sourcePathAliasResult.lineage.sourceIds.length, 1);
+  assert.match(sourcePathAliasResult.lineage.sourceIds[0], /^source-/);
+
+  const multiInspected = await tool.execute("spreadsheet_inspect", {
+    sources: [
+      { path: "uploads/multi-july.xlsx" },
+      { path: "uploads/multi-july-copy.xlsx" },
+      { path: "uploads/multi-august.xlsx" },
+      { path: "uploads/multi-owner.csv" },
+      { path: "uploads/corrupt.xlsx" }
+    ]
+  }, { workspace });
+  assert.equal(multiInspected.status, "completed", multiInspected.content);
+  const multiInspection = JSON.parse(multiInspected.content);
+  assert.equal(multiInspection.inspectionStatus, "needs_review");
+  assert.equal(multiInspection.sources.length, 5);
+  assert.equal(multiInspection.failedSources.some((item) => item.path.endsWith("corrupt.xlsx")), true);
+  assert.equal(multiInspection.duplicateGroups.some((item) => item.type === "identical_file"), true);
+  assert.equal(multiInspection.overlapCandidates.length > 0, true);
+  const julySource = multiInspection.sources.find((item) => item.path.endsWith("multi-july.xlsx"));
+  const julyCopySource = multiInspection.sources.find((item) => item.path.endsWith("multi-july-copy.xlsx"));
+  const augustSource = multiInspection.sources.find((item) => item.path.endsWith("multi-august.xlsx"));
+  const ownerSource = multiInspection.sources.find((item) => item.path.endsWith("multi-owner.csv"));
+  const corruptSource = multiInspection.sources.find((item) => item.path.endsWith("corrupt.xlsx"));
+  const julyTable = multiInspection.tables.find((item) => item.sourceId === julySource.sourceId);
+  const augustTable = multiInspection.tables.find((item) => item.sourceId === augustSource.sourceId);
+  const multiOwnerTable = multiInspection.tables.find((item) => item.sourceId === ownerSource.sourceId);
+  assert.ok(julyTable && augustTable && multiOwnerTable);
+
+  const sourceDecisions = [
+    { sourceId: julySource.sourceId, action: "include" },
+    { sourceId: augustSource.sourceId, action: "include" },
+    { sourceId: ownerSource.sourceId, action: "include" },
+    { sourceId: julyCopySource.sourceId, action: "exclude", reasonCode: "exact_duplicate", reason: "与七月报表哈希相同" },
+    { sourceId: corruptSource.sourceId, action: "exclude", reasonCode: "corrupt_source", reason: "工作簿损坏，无法读取" }
+  ];
+  const multiComputed = await tool.execute("spreadsheet_compute", {
+    analysisId: multiInspection.analysisId,
+    sourceDecisions,
+    queries: [{
+      id: "multi-source-owner-totals",
+      from: {
+        type: "union",
+        tables: [
+          {
+            tableId: julyTable.tableId,
+            columnMap: { date: "date", campaignId: "campaignId", spend: "spend", sales: "sales" }
+          },
+          {
+            tableId: augustTable.tableId,
+            columnMap: { "日期": "date", "广告活动": "campaignId", "花费": "spend", "销售额": "sales" }
+          }
+        ]
+      },
+      joins: [{
+        tableId: multiOwnerTable.tableId,
+        type: "left",
+        leftColumns: ["campaignId"],
+        rightColumns: ["campaignId"],
+        cardinality: "many_to_one",
+        prefix: "owner"
+      }],
+      groupBy: ["owner.owner"],
+      measures: [
+        { id: "spend", operation: "sum", column: "spend" },
+        { id: "sales", operation: "sum", column: "sales" }
+      ],
+      sort: [{ field: "owner.owner", direction: "asc" }]
+    }]
+  }, { workspace });
+  assert.equal(multiComputed.status, "completed", multiComputed.content);
+  const multiCalculation = JSON.parse(multiComputed.content);
+  const multiResult = findResult(multiCalculation, "multi-source-owner-totals");
+  assert.deepEqual(multiResult.preview, [
+    { "owner.owner": "team-1", spend: "30.30", sales: "300" },
+    { "owner.owner": "team-2", spend: "20.2", sales: "200" }
+  ]);
+  assert.equal(multiResult.lineage.sourceIds.length, 3);
+  assert.equal(multiResult.lineage.tables.length, 3);
+
+  const multiCoverage = await tool.execute("spreadsheet_validate", {
+    analysisId: multiInspection.analysisId,
+    resultIds: [multiResult.resultId],
+    checks: [{
+      id: "all-sources-accounted",
+      type: "source_coverage",
+      resultIds: [multiResult.resultId],
+      requireAllSourcesAccountedFor: true
+    }]
+  }, { workspace });
+  assert.equal(multiCoverage.status, "completed", multiCoverage.content);
+  assert.equal(JSON.parse(multiCoverage.content).validationStatus, "passed");
+
+  const unionMismatch = await tool.execute("spreadsheet_compute", {
+    analysisId: multiInspection.analysisId,
+    queries: [{
+      id: "union-schema-mismatch",
+      from: {
+        type: "union",
+        tables: [{ tableId: julyTable.tableId }, { tableId: multiOwnerTable.tableId }]
+      },
+      measures: [{ id: "rows", operation: "count" }]
+    }]
+  }, { workspace });
+  assert.equal(unionMismatch.status, "blocked");
+  assert.equal(unionMismatch.error.code, "spreadsheet_union_schema_mismatch");
+
+  const duplicateSourcePath = await tool.execute("spreadsheet_inspect", {
+    sources: [{ path: "uploads/multi-july.xlsx" }, { path: "uploads/multi-july.xlsx" }]
+  }, { workspace });
+  assert.equal(duplicateSourcePath.status, "blocked");
+  assert.equal(duplicateSourcePath.error.code, "spreadsheet_sources_invalid");
+
+  await fs.appendFile(path.join(workspace, "uploads", "multi-owner.csv"), "D,team-3\n", "utf8");
+  const multiChanged = await tool.execute("spreadsheet_validate", {
+    analysisId: multiInspection.analysisId,
+    resultIds: [multiResult.resultId],
+    checks: [{ id: "changed-sources", type: "source_coverage" }]
+  }, { workspace });
+  assert.equal(multiChanged.status, "blocked");
+  assert.equal(multiChanged.error.code, "spreadsheet_source_changed");
   assert.equal(formulaTable.formulaColumns.includes("formulaTotal"), true);
   assert.equal(formulaTable.columns.find((column) => column.name === "formulaTotal")?.formulaStatus, "formula_backed");
 

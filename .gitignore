@@ -7,3 +7,5 @@ npm-debug.log*
 *.tgz
 __pycache__/
 *.pyc
+evals/spreadsheets/fixtures/
+evals/spreadsheets/results/
