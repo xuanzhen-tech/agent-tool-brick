@@ -25,6 +25,8 @@ from openpyxl.utils import get_column_letter, range_boundaries
 
 
 MAX_SOURCE_BYTES = 100 * 1024 * 1024
+MAX_SOURCES = 100
+MAX_TOTAL_SOURCE_BYTES = 1024 * 1024 * 1024
 MAX_ARCHIVE_BYTES = 512 * 1024 * 1024
 MAX_ARCHIVE_RATIO = 200
 MAX_NON_EMPTY_CELLS = 2_000_000
@@ -36,6 +38,9 @@ MAX_QUERIES = 20
 MAX_CHECKS = 100
 MAX_NOT_COMPUTABLE_SAMPLES = 100
 MAX_PUBLIC_NOT_COMPUTABLE_SAMPLES = 5
+MAX_PUBLIC_PREVIEW_ROWS = 10
+MAX_PUBLIC_PREVIEW_CELLS = 60
+MAX_PUBLIC_PREVIEW_COLUMNS = 20
 MAX_PUBLIC_VALIDATION_CHECKS = 20
 MAX_PUBLIC_EVIDENCE_ITEMS = 20
 MAX_PUBLIC_EVIDENCE_FIELDS = 40
@@ -98,45 +103,98 @@ def emit(value: dict[str, Any]) -> None:
 
 
 def inspect_spreadsheet(workspace: Path, arguments: dict[str, Any]) -> dict[str, Any]:
-    source_path = resolve_source_path(workspace, arguments.get("path"))
-    source_hash = hash_file(source_path)
-    requested_sheets = normalize_string_list(arguments.get("sheets"), "sheets", maximum=50)
-    extension = source_path.suffix.lower()
-    if extension in {".xlsx", ".xlsm"}:
-        ensure_safe_archive(source_path)
-        sheets, tables, warnings = inspect_excel(source_path, source_hash, requested_sheets)
-    else:
-        sheets, tables, warnings = inspect_delimited(source_path, source_hash, extension, requested_sheets)
-    if hash_file(source_path) != source_hash:
-        raise SpreadsheetError(
-            "spreadsheet_source_changed",
-            "源表格在 inspect 过程中发生变化，请重新执行。",
-            blocked=True,
-        )
+    source_specs, legacy_single = normalize_inspect_sources(arguments)
+    resolved_sources = resolve_inspect_sources(workspace, source_specs)
+    sources: list[dict[str, Any]] = []
+    sheets: list[dict[str, Any]] = []
+    tables: list[dict[str, Any]] = []
+    failed_sources: list[dict[str, Any]] = []
+    warnings: list[str] = []
 
-    analysis_id = f"analysis-{source_hash[:12]}-{uuid.uuid4().hex[:8]}"
+    for entry in resolved_sources:
+        source_path = entry["path"]
+        source_hash = hash_file(source_path)
+        source_id = create_source_id(entry["relativePath"], source_hash)
+        source = {
+            "sourceId": source_id,
+            "path": entry["relativePath"],
+            "bytes": source_path.stat().st_size,
+            "sha256": source_hash,
+            "format": source_path.suffix.lower()[1:],
+            "status": "ready",
+        }
+        try:
+            source_sheets, source_tables, source_warnings = inspect_one_source(
+                source_path,
+                source_id,
+                entry["sheets"],
+            )
+            if hash_file(source_path) != source_hash:
+                raise SpreadsheetError(
+                    "spreadsheet_source_changed",
+                    "源表格在 inspect 过程中发生变化，请重新执行。",
+                    {"sourceId": source_id, "path": entry["relativePath"]},
+                    blocked=True,
+                )
+            for sheet in source_sheets:
+                sheet.update({"sourceId": source_id, "sourcePath": entry["relativePath"]})
+            for table in source_tables:
+                table.update({"sourceId": source_id, "sourcePath": entry["relativePath"]})
+            source.update({"sheetCount": len(source_sheets), "tableCount": len(source_tables)})
+            if not source_tables:
+                source["status"] = "no_tables"
+                failed_sources.append({
+                    "sourceId": source_id,
+                    "path": entry["relativePath"],
+                    "code": "spreadsheet_no_table_detected",
+                    "message": "没有识别到包含表头和数据行的表格区域。",
+                })
+            sheets.extend(source_sheets)
+            tables.extend(source_tables)
+            warnings.extend(f"{entry['relativePath']}: {message}" for message in source_warnings)
+        except SpreadsheetError as error:
+            if legacy_single or error.code in {"spreadsheet_archive_unsafe", "spreadsheet_path_escape", "spreadsheet_source_changed"}:
+                raise
+            source["status"] = "failed"
+            source.update({"sheetCount": 0, "tableCount": 0})
+            failed_sources.append({
+                "sourceId": source_id,
+                "path": entry["relativePath"],
+                "code": error.code,
+                "message": error.message,
+                "details": error.details,
+            })
+        sources.append(source)
+
+    source_set_hash = create_source_set_hash(sources)
+    duplicate_groups = detect_duplicate_groups(sources, tables)
+    overlap_candidates = detect_overlap_candidates(tables)
+    analysis_id = f"analysis-{source_set_hash[:12]}-{uuid.uuid4().hex[:8]}"
     inspection_status = "ready"
     if not tables:
         inspection_status = "blocked"
         warnings.append("没有识别到包含表头和数据行的表格区域。")
+    elif failed_sources or duplicate_groups or overlap_candidates:
+        inspection_status = "needs_review"
     elif any(table["needsSelection"] for table in tables) or any(sheet["tableCount"] > 1 for sheet in sheets):
         inspection_status = "needs_selection"
 
     manifest = {
-        "schemaVersion": "agent-spreadsheet.analysis.v1",
+        "schemaVersion": "agent-spreadsheet.analysis.v2",
         "analysisId": analysis_id,
         "createdAt": iso_now(),
-        "source": {
-            "path": relative_posix(workspace, source_path),
-            "bytes": source_path.stat().st_size,
-            "sha256": source_hash,
-            "format": extension[1:],
-        },
+        "sourceSetHash": source_set_hash,
+        "sources": sources,
         "inspectionStatus": inspection_status,
         "sheets": sheets,
         "tables": tables,
+        "duplicateGroups": duplicate_groups,
+        "overlapCandidates": overlap_candidates,
+        "failedSources": failed_sources,
         "warnings": warnings,
     }
+    if len(sources) == 1:
+        manifest["source"] = {key: sources[0][key] for key in ("path", "bytes", "sha256", "format")}
     storage_root = ensure_safe_directory(workspace, "temp")
     storage_root = ensure_safe_directory(storage_root, "spreadsheets")
     analysis_directory = storage_root / analysis_id
@@ -149,17 +207,151 @@ def inspect_spreadsheet(workspace: Path, arguments: dict[str, Any]) -> dict[str,
     return {
         "analysisId": analysis_id,
         "inspectionStatus": inspection_status,
-        "source": manifest["source"],
+        "sourceSetHash": source_set_hash,
+        "source": manifest.get("source"),
+        "sources": sources,
         "sheets": sheets,
         "tables": public_tables,
+        "duplicateGroups": duplicate_groups,
+        "overlapCandidates": overlap_candidates,
+        "failedSources": failed_sources,
         "warnings": warnings,
         "manifestPath": relative_posix(workspace, manifest_path),
         "guidance": (
-            "存在多个或不确定的表格区域；计算时必须明确传入返回的 tableId。"
+            "来源集合存在失败、重复或日期重叠；先明确来源取舍，再进行正式计算。"
+            if inspection_status == "needs_review"
+            else "存在多个或不确定的表格区域；计算时必须明确传入返回的 tableId。"
             if inspection_status == "needs_selection"
             else "计算时使用这里返回的 tableId，不要根据工作表名称猜测数据范围。"
         ),
     }
+
+
+def normalize_inspect_sources(arguments: dict[str, Any]) -> tuple[list[dict[str, Any]], bool]:
+    has_path = isinstance(arguments.get("path"), str) and bool(arguments["path"].strip())
+    has_sources = arguments.get("sources") is not None
+    if has_path == has_sources:
+        raise SpreadsheetError("spreadsheet_sources_invalid", "path 与 sources 必须且只能提供一个。", blocked=True)
+    if has_path:
+        sheets = normalize_string_list(arguments.get("sheets"), "sheets", maximum=50)
+        return [{"path": arguments["path"], "sheets": sheets}], True
+    if arguments.get("sheets") is not None:
+        raise SpreadsheetError("spreadsheet_sources_invalid", "使用 sources 时，sheets 必须写在对应来源对象内。", blocked=True)
+    raw_sources = arguments.get("sources")
+    if not isinstance(raw_sources, list) or not raw_sources or len(raw_sources) > MAX_SOURCES:
+        raise SpreadsheetError("spreadsheet_sources_invalid", f"sources 必须是 1-{MAX_SOURCES} 项数组。", blocked=True)
+    normalized = []
+    for index, source in enumerate(raw_sources):
+        if not isinstance(source, dict) or set(source) - {"path", "sheets"}:
+            raise SpreadsheetError("spreadsheet_sources_invalid", f"sources[{index}] 只支持 path 和 sheets。", blocked=True)
+        if not isinstance(source.get("path"), str) or not source["path"].strip():
+            raise SpreadsheetError("spreadsheet_sources_invalid", f"sources[{index}].path 必须是非空字符串。", blocked=True)
+        normalized.append({
+            "path": source["path"],
+            "sheets": normalize_string_list(source.get("sheets"), f"sources[{index}].sheets", maximum=50),
+        })
+    return normalized, False
+
+
+def resolve_inspect_sources(workspace: Path, source_specs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    resolved = []
+    seen_paths: set[str] = set()
+    total_bytes = 0
+    for source in source_specs:
+        source_path = resolve_source_path(workspace, source["path"])
+        canonical = os.path.normcase(str(source_path))
+        if canonical in seen_paths:
+            raise SpreadsheetError(
+                "spreadsheet_sources_invalid",
+                "同一个表格路径不能重复传入。",
+                {"path": relative_posix(workspace, source_path)},
+                blocked=True,
+            )
+        seen_paths.add(canonical)
+        total_bytes += source_path.stat().st_size
+        if total_bytes > MAX_TOTAL_SOURCE_BYTES:
+            raise SpreadsheetError(
+                "spreadsheet_sources_too_large",
+                "表格来源总大小超过 1GB 安全上限。",
+                {"bytes": total_bytes, "maxBytes": MAX_TOTAL_SOURCE_BYTES},
+                blocked=True,
+            )
+        resolved.append({
+            "path": source_path,
+            "relativePath": relative_posix(workspace, source_path),
+            "sheets": source["sheets"],
+        })
+    return resolved
+
+
+def inspect_one_source(source_path: Path, source_id: str, requested_sheets: list[str]) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[str]]:
+    extension = source_path.suffix.lower()
+    if extension in {".xlsx", ".xlsm"}:
+        ensure_safe_archive(source_path)
+        return inspect_excel(source_path, source_id, requested_sheets)
+    return inspect_delimited(source_path, source_id, extension, requested_sheets)
+
+
+def create_source_id(relative_path: str, source_hash: str) -> str:
+    digest = hashlib.sha256(f"{relative_path}:{source_hash}".encode("utf8")).hexdigest()[:16]
+    return f"source-{digest}"
+
+
+def create_source_set_hash(sources: list[dict[str, Any]]) -> str:
+    entries = sorted(f"{item['path']}:{item['sha256']}" for item in sources)
+    return hashlib.sha256("\n".join(entries).encode("utf8")).hexdigest()
+
+
+def detect_duplicate_groups(sources: list[dict[str, Any]], tables: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    groups: list[dict[str, Any]] = []
+    by_file_hash: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for source in sources:
+        by_file_hash[source["sha256"]].append(source)
+    for source_hash, matches in by_file_hash.items():
+        if len(matches) > 1:
+            groups.append({
+                "type": "identical_file",
+                "sourceIds": [item["sourceId"] for item in matches],
+                "paths": [item["path"] for item in matches],
+                "sha256": source_hash,
+            })
+    by_table_hash: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for table in tables:
+        by_table_hash[table["contentHash"]].append(table)
+    for content_hash, matches in by_table_hash.items():
+        source_ids = {item["sourceId"] for item in matches}
+        if len(matches) > 1 and len(source_ids) > 1:
+            groups.append({
+                "type": "identical_table",
+                "tableIds": [item["tableId"] for item in matches],
+                "sourceIds": sorted(source_ids),
+                "contentHash": content_hash,
+            })
+    return groups
+
+
+def detect_overlap_candidates(tables: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    output: list[dict[str, Any]] = []
+    for left_index, left in enumerate(tables):
+        for right in tables[left_index + 1:]:
+            if left["sourceId"] == right["sourceId"] or left["schemaFingerprint"] != right["schemaFingerprint"]:
+                continue
+            left_ranges = {item["column"]: item for item in left.get("dateRanges") or []}
+            right_ranges = {item["column"]: item for item in right.get("dateRanges") or []}
+            for column in sorted(set(left_ranges) & set(right_ranges)):
+                left_range = left_ranges[column]
+                right_range = right_ranges[column]
+                if left_range["minimum"] <= right_range["maximum"] and right_range["minimum"] <= left_range["maximum"]:
+                    output.append({
+                        "tableIds": [left["tableId"], right["tableId"]],
+                        "sourceIds": [left["sourceId"], right["sourceId"]],
+                        "dateColumn": column,
+                        "ranges": [
+                            [left_range["minimum"], left_range["maximum"]],
+                            [right_range["minimum"], right_range["maximum"]],
+                        ],
+                    })
+    return output
 
 
 def inspect_excel(source_path: Path, source_hash: str, requested_sheets: list[str]) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[str]]:
@@ -355,6 +547,17 @@ def build_table_profile(sheet_name: str, source_hash: str, values: list[list[Any
 
     cell_range = f"{get_column_letter(min_col)}{min_row}:{get_column_letter(max_col)}{max_row}"
     table_id = f"table-{hashlib.sha256(f'{source_hash}:{sheet_name}:{cell_range}'.encode('utf8')).hexdigest()[:16]}"
+    schema_fingerprint = hashlib.sha256(json.dumps(
+        [{"name": item["name"], "type": item["inferredType"]} for item in profiles],
+        ensure_ascii=False,
+        sort_keys=True,
+    ).encode("utf8")).hexdigest()
+    content_hash = hash_table_values(values)
+    date_ranges = [
+        {"column": item["name"], **item["dateRange"]}
+        for item in profiles
+        if item.get("dateRange")
+    ]
     structure_ambiguous = bool(header_warnings or merged_ranges)
     summary_rows = detect_summary_rows(data_rows, min_row + 1)
     return {
@@ -369,6 +572,9 @@ def build_table_profile(sheet_name: str, source_hash: str, values: list[list[Any
         "endColumn": max_col,
         "rowCount": max(0, len(data_rows)),
         "columnCount": len(headers),
+        "schemaFingerprint": schema_fingerprint,
+        "contentHash": content_hash,
+        "dateRanges": date_ranges,
         "headers": headers,
         "headerWarnings": header_warnings,
         "columns": profiles,
@@ -387,7 +593,7 @@ def profile_column(name: str, values: list[Any], formula_count: int, cached_coun
     serial_values = [canonical_scalar(value) for value in non_null]
     duplicate_count = sum(count - 1 for count in Counter(serial_values).values() if count > 1)
     ambiguous_numeric = sum(1 for value in non_null if isinstance(value, str) and looks_ambiguous_numeric(value))
-    return {
+    profile = {
         "name": name,
         "inferredType": infer_type(type_counts),
         "nonNullCount": len(non_null),
@@ -399,6 +605,44 @@ def profile_column(name: str, values: list[Any], formula_count: int, cached_coun
         "cachedFormulaValueCount": cached_count,
         "formulaStatus": "cached_unverified" if cached_count else "formula_backed" if formula_count else "none",
     }
+    date_values = [value for value in non_null if isinstance(value, (date, datetime))]
+    if date_values and len(date_values) == len(non_null):
+        profile["dateRange"] = {
+            "minimum": serialize_value(min(date_values)),
+            "maximum": serialize_value(max(date_values)),
+        }
+    elif non_null and all(isinstance(value, str) for value in non_null):
+        parsed_dates = [parse_iso_date_candidate(value) for value in non_null]
+        if all(value is not None for value in parsed_dates):
+            profile["dateRange"] = {
+                "minimum": min(parsed_dates),
+                "maximum": max(parsed_dates),
+            }
+    return profile
+
+
+def hash_table_values(values: list[list[Any]]) -> str:
+    digest = hashlib.sha256()
+    for row in values:
+        digest.update(json.dumps(
+            row,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            default=json_default,
+        ).encode("utf8"))
+        digest.update(b"\n")
+    return digest.hexdigest()
+
+
+def parse_iso_date_candidate(value: str) -> str | None:
+    text = value.strip()
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}(?:[T ][0-9:.+-Z]+)?", text):
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00")) if len(text) > 10 else date.fromisoformat(text)
+        return parsed.isoformat()
+    except ValueError:
+        return None
 
 
 def detect_summary_rows(rows: list[list[Any]], first_source_row: int) -> list[dict[str, Any]]:
@@ -441,15 +685,16 @@ def apply_summary_row_policy(metadata: dict[str, Any], rows: list[dict[str, Any]
 
 def compute_spreadsheet(workspace: Path, arguments: dict[str, Any]) -> dict[str, Any]:
     analysis_id = require_id(arguments.get("analysisId"), "analysisId", "analysis")
-    manifest, analysis_directory, source_path = load_analysis(workspace, analysis_id)
-    ensure_source_unchanged(manifest, source_path)
+    manifest, analysis_directory, source_paths = load_analysis(workspace, analysis_id)
+    ensure_sources_unchanged(manifest, source_paths)
     queries = arguments.get("queries")
     if not isinstance(queries, list) or not queries or len(queries) > MAX_QUERIES:
         raise SpreadsheetError("spreadsheet_queries_invalid", f"queries 必须是 1-{MAX_QUERIES} 项数组。", blocked=True)
     query_ids: set[str] = set()
     results: list[dict[str, Any]] = []
     warnings: list[str] = []
-    context = WorkbookContext(source_path, manifest)
+    context = WorkbookContext(source_paths, manifest)
+    source_decisions = normalize_source_decisions(arguments.get("sourceDecisions"), manifest)
     try:
         computed: list[dict[str, Any]] = []
         for query in queries:
@@ -461,7 +706,7 @@ def compute_spreadsheet(workspace: Path, arguments: dict[str, Any]) -> dict[str,
             query_ids.add(query_id)
             computed.append(execute_query(context, query))
 
-        ensure_source_unchanged(manifest, source_path)
+        ensure_sources_unchanged(manifest, source_paths)
         results_directory = ensure_safe_directory(analysis_directory, "results")
         for query, result in zip(queries, computed):
             result_id = f"result-{uuid.uuid4().hex}"
@@ -483,9 +728,12 @@ def compute_spreadsheet(workspace: Path, arguments: dict[str, Any]) -> dict[str,
             data_hash = hash_file(data_path)
             csv_hash = hash_file(csv_path)
             lineage = {
-                "sourceHash": manifest["source"]["sha256"],
+                "sourceSetHash": manifest["sourceSetHash"],
+                "sources": result_source_lineage(manifest, result["tableIds"]),
                 "tables": [table_lineage(manifest, table_id) for table_id in result["tableIds"]],
+                "sourceDecisions": source_decisions,
                 "filters": query.get("filters") or [],
+                "from": query.get("from"),
                 "joins": query.get("joins") or [],
                 "groupBy": query.get("groupBy") or [],
                 "measures": query.get("measures") or [],
@@ -501,8 +749,9 @@ def compute_spreadsheet(workspace: Path, arguments: dict[str, Any]) -> dict[str,
                 "resultId": result_id,
                 "queryId": query["id"],
                 "createdAt": iso_now(),
-                "sourceHash": manifest["source"]["sha256"],
+                "sourceSetHash": manifest["sourceSetHash"],
                 "tableIds": result["tableIds"],
+                "sourceDecisions": source_decisions,
                 "query": query,
                 "columns": result["columns"],
                 "rowCount": result["rowCount"],
@@ -518,6 +767,8 @@ def compute_spreadsheet(workspace: Path, arguments: dict[str, Any]) -> dict[str,
                 "notComputableSamplesTruncated": result["notComputableCount"] > MAX_PUBLIC_NOT_COMPUTABLE_SAMPLES,
                 "lineage": lineage,
             }
+            if len(manifest["sources"]) == 1:
+                result_manifest["sourceHash"] = manifest["sources"][0]["sha256"]
             result_manifest_path = results_directory / f"{result_id}.manifest.json"
             atomic_write_json(result_manifest_path, result_manifest)
             summary = {
@@ -534,8 +785,17 @@ def compute_spreadsheet(workspace: Path, arguments: dict[str, Any]) -> dict[str,
                 "notComputableTruncated": result["notComputableTruncated"],
                 "notComputableSamplesTruncated": result["notComputableCount"] > MAX_PUBLIC_NOT_COMPUTABLE_SAMPLES,
                 "lineage": {
-                    "sourceHash": lineage["sourceHash"],
-                    "tables": lineage["tables"],
+                    "sourceSetHash": lineage["sourceSetHash"],
+                    "sourceIds": [source["sourceId"] for source in lineage["sources"]],
+                    "tables": [
+                        {
+                            "tableId": table["tableId"],
+                            "sourceId": table.get("sourceId"),
+                            "sheet": table.get("sheet"),
+                            "range": table.get("range"),
+                        }
+                        for table in lineage["tables"]
+                    ],
                     "inputRowCount": lineage["inputRowCount"],
                     "joinedRowCount": lineage["joinedRowCount"],
                     "filteredRowCount": lineage["filteredRowCount"],
@@ -560,26 +820,66 @@ def compute_spreadsheet(workspace: Path, arguments: dict[str, Any]) -> dict[str,
         context.close()
 
 
-class WorkbookContext:
-    """在一次 worker 调用中复用工作簿读取器。"""
+def normalize_source_decisions(value: Any, manifest: dict[str, Any]) -> list[dict[str, Any]]:
+    if value is None:
+        return []
+    if not isinstance(value, list) or len(value) > MAX_SOURCES:
+        raise SpreadsheetError("spreadsheet_source_decisions_invalid", f"sourceDecisions 必须是最多 {MAX_SOURCES} 项数组。", blocked=True)
+    known = {source["sourceId"] for source in manifest["sources"]}
+    known_paths = {source["path"]: source["sourceId"] for source in manifest["sources"]}
+    allowed_reasons = {
+        "exact_duplicate",
+        "out_of_scope",
+        "unsupported_period",
+        "corrupt_source",
+        "superseded",
+        "user_excluded",
+        "other",
+    }
+    seen: set[str] = set()
+    output = []
+    for index, decision in enumerate(value):
+        if not isinstance(decision, dict) or set(decision) - {"sourceId", "action", "reasonCode", "reason"}:
+            raise SpreadsheetError("spreadsheet_source_decisions_invalid", f"sourceDecisions[{index}] 字段无效。", blocked=True)
+        source_id = require_name(decision.get("sourceId"), f"sourceDecisions[{index}].sourceId")
+        # 模型偶尔会复制 inspect 返回的唯一来源 path。路径在同一 analysis 内唯一，
+        # 因此可以安全归一化为真正 sourceId，持久化结果仍只保存规范 ID。
+        source_id = known_paths.get(source_id, source_id)
+        if source_id not in known or source_id in seen:
+            raise SpreadsheetError("spreadsheet_source_decisions_invalid", f"sourceId 不存在或重复: {source_id}", blocked=True)
+        action = decision.get("action")
+        if action not in {"include", "exclude"}:
+            raise SpreadsheetError("spreadsheet_source_decisions_invalid", "sourceDecisions.action 只支持 include/exclude。", blocked=True)
+        normalized = {"sourceId": source_id, "action": action}
+        if action == "exclude":
+            reason_code = decision.get("reasonCode")
+            reason = decision.get("reason")
+            if reason_code not in allowed_reasons or not isinstance(reason, str) or not reason.strip():
+                raise SpreadsheetError(
+                    "spreadsheet_source_decisions_invalid",
+                    "exclude 必须提供合法 reasonCode 和非空 reason。",
+                    {"sourceId": source_id},
+                    blocked=True,
+                )
+            normalized.update({"reasonCode": reason_code, "reason": reason.strip()[:500]})
+        seen.add(source_id)
+        output.append(normalized)
+    return output
 
-    def __init__(self, source_path: Path, manifest: dict[str, Any]):
-        self.source_path = source_path
+
+class WorkbookContext:
+    """在一次 worker 调用中按需复用多个来源的工作簿读取器。"""
+
+    def __init__(self, source_paths: dict[str, Path], manifest: dict[str, Any]):
+        self.source_paths = source_paths
         self.manifest = manifest
-        self.extension = source_path.suffix.lower()
-        self.workbook = None
-        if self.extension in {".xlsx", ".xlsm"}:
-            self.workbook = load_workbook(
-                source_path,
-                read_only=True,
-                data_only=True,
-                keep_vba=self.extension == ".xlsm",
-            )
+        self.workbooks: dict[str, Any] = {}
         self.table_cache: dict[str, list[dict[str, Any]]] = {}
 
     def close(self) -> None:
-        if self.workbook:
-            self.workbook.close()
+        for workbook in self.workbooks.values():
+            workbook.close()
+        self.workbooks.clear()
 
     def table(self, table_id: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         metadata = next((item for item in self.manifest["tables"] if item["tableId"] == table_id), None)
@@ -600,6 +900,9 @@ class WorkbookContext:
         return metadata, [dict(row) for row in self.table_cache[table_id]]
 
     def _read_table(self, metadata: dict[str, Any]) -> list[dict[str, Any]]:
+        source_id = metadata["sourceId"]
+        source_path = self.source_paths[source_id]
+        extension = source_path.suffix.lower()
         headers = metadata["headers"]
         if len(set(headers)) != len(headers):
             raise SpreadsheetError(
@@ -609,8 +912,15 @@ class WorkbookContext:
                 blocked=True,
             )
         rows: list[dict[str, Any]] = []
-        if self.workbook:
-            worksheet = self.workbook[metadata["sheet"]]
+        if extension in {".xlsx", ".xlsm"}:
+            if source_id not in self.workbooks:
+                self.workbooks[source_id] = load_workbook(
+                    source_path,
+                    read_only=True,
+                    data_only=True,
+                    keep_vba=extension == ".xlsm",
+                )
+            worksheet = self.workbooks[source_id][metadata["sheet"]]
             for values in worksheet.iter_rows(
                 min_row=metadata["startRow"] + 1,
                 max_row=metadata["endRow"],
@@ -620,8 +930,8 @@ class WorkbookContext:
             ):
                 rows.append({header: value for header, value in zip(headers, values)})
         else:
-            delimiter = "\t" if self.extension == ".tsv" else ","
-            raw = read_delimited_rows(self.source_path, delimiter)
+            delimiter = "\t" if extension == ".tsv" else ","
+            raw = read_delimited_rows(source_path, delimiter)
             for values in raw[1:]:
                 padded = values + [None] * (len(headers) - len(values))
                 rows.append({header: value for header, value in zip(headers, padded)})
@@ -629,16 +939,13 @@ class WorkbookContext:
 
 
 def execute_query(context: WorkbookContext, query: dict[str, Any]) -> dict[str, Any]:
-    table_id = require_name(query.get("tableId"), "query.tableId")
-    metadata, rows = context.table(table_id)
-    rows = apply_summary_row_policy(metadata, rows, query.get("summaryRowPolicy"))
+    table_id = query_default_table_id(query)
     parsers = normalize_parsers(query.get("columnParsers"), table_id)
+    metadata, rows, table_ids = load_query_input(context, query, parsers)
     join_prefixes = normalized_join_prefixes(query.get("joins") or [])
-    source_columns = referenced_columns(query, table_id, join_prefixes, set(metadata.get("headers") or []))
+    source_columns = referenced_columns(query, metadata["tableId"], join_prefixes, set(metadata.get("headers") or []))
     assert_columns_declared(metadata, source_columns)
     assert_authoritative_columns(metadata, source_columns)
-    rows = apply_parsers(rows, parsers.get(table_id, {}))
-    table_ids = [table_id]
     input_row_count = len(rows)
     available_fields = set(metadata.get("headers") or [])
 
@@ -674,10 +981,18 @@ def execute_query(context: WorkbookContext, query: dict[str, Any]) -> dict[str, 
 
     missing_fields = sorted(query_input_fields(query) - available_fields)
     if missing_fields:
+        joined_fields = sorted(
+            field for field in available_fields
+            if any(field.startswith(f"{prefix}.") for prefix in join_prefixes)
+        )
         raise SpreadsheetError(
             "spreadsheet_column_not_found",
-            "查询引用了不存在的字段。",
-            {"columns": missing_fields},
+            (
+                "查询引用了不存在的字段；联接右表非键字段必须写成 <prefix>.<column>。"
+                if joins
+                else "查询引用了不存在的字段。"
+            ),
+            {"columns": missing_fields, "availableJoinFields": joined_fields[:100]},
             blocked=True,
         )
 
@@ -746,6 +1061,153 @@ def execute_query(context: WorkbookContext, query: dict[str, Any]) -> dict[str, 
     }
 
 
+def query_default_table_id(query: dict[str, Any]) -> str | None:
+    source = query.get("from")
+    legacy_table_id = query.get("tableId")
+    if source is None:
+        return require_name(legacy_table_id, "query.tableId")
+    if legacy_table_id is not None:
+        raise SpreadsheetError("spreadsheet_query_invalid", "query.tableId 与 query.from 不能同时提供。", blocked=True)
+    if query.get("summaryRowPolicy") is not None:
+        raise SpreadsheetError(
+            "spreadsheet_query_invalid",
+            "使用 query.from 时，summaryRowPolicy 必须写在 from 或 union.tables 条目中。",
+            blocked=True,
+        )
+    if not isinstance(source, dict):
+        raise SpreadsheetError("spreadsheet_query_invalid", "query.from 必须是对象。", blocked=True)
+    source_type = source.get("type")
+    if source_type == "table":
+        if set(source) - {"type", "tableId", "summaryRowPolicy"}:
+            raise SpreadsheetError("spreadsheet_query_invalid", "from.type=table 包含不支持字段。", blocked=True)
+        return require_name(source.get("tableId"), "query.from.tableId")
+    if source_type == "union":
+        return None
+    raise SpreadsheetError("spreadsheet_query_invalid", "query.from.type 只支持 table 或 union。", blocked=True)
+
+
+def load_query_input(context: WorkbookContext, query: dict[str, Any], parsers: dict[str, dict[str, dict[str, Any]]]) -> tuple[dict[str, Any], list[dict[str, Any]], list[str]]:
+    source = query.get("from")
+    if source is None:
+        table_id = require_name(query.get("tableId"), "query.tableId")
+        metadata, rows = context.table(table_id)
+        rows = apply_summary_row_policy(metadata, rows, query.get("summaryRowPolicy"))
+        assert_columns_declared(metadata, set(parsers.get(table_id, {})))
+        rows = apply_parsers(rows, parsers.get(table_id, {}))
+        return metadata, rows, [table_id]
+    if source["type"] == "table":
+        table_id = require_name(source.get("tableId"), "query.from.tableId")
+        metadata, rows = context.table(table_id)
+        rows = apply_summary_row_policy(metadata, rows, source.get("summaryRowPolicy"))
+        assert_columns_declared(metadata, set(parsers.get(table_id, {})))
+        rows = apply_parsers(rows, parsers.get(table_id, {}))
+        return metadata, rows, [table_id]
+    return load_union_input(context, source, parsers)
+
+
+def load_union_input(context: WorkbookContext, source: dict[str, Any], parsers: dict[str, dict[str, dict[str, Any]]]) -> tuple[dict[str, Any], list[dict[str, Any]], list[str]]:
+    if set(source) - {"type", "tables"}:
+        raise SpreadsheetError("spreadsheet_union_invalid", "from.type=union 包含不支持字段。", blocked=True)
+    entries = source.get("tables")
+    if not isinstance(entries, list) or len(entries) < 2 or len(entries) > MAX_SOURCES:
+        raise SpreadsheetError("spreadsheet_union_invalid", f"union.tables 必须是 2-{MAX_SOURCES} 项数组。", blocked=True)
+    table_ids: list[str] = []
+    combined_rows: list[dict[str, Any]] = []
+    canonical_headers: list[str] | None = None
+    canonical_types: dict[str, str] | None = None
+    formula_columns: set[str] = set()
+    source_metadata: list[dict[str, Any]] = []
+    for index, entry in enumerate(entries):
+        if not isinstance(entry, dict) or set(entry) - {"tableId", "columnMap", "summaryRowPolicy"}:
+            raise SpreadsheetError("spreadsheet_union_invalid", f"union.tables[{index}] 字段无效。", blocked=True)
+        table_id = require_name(entry.get("tableId"), f"union.tables[{index}].tableId")
+        if table_id in table_ids:
+            raise SpreadsheetError("spreadsheet_union_invalid", f"union tableId 重复: {table_id}", blocked=True)
+        metadata, rows = context.table(table_id)
+        rows = apply_summary_row_policy(metadata, rows, entry.get("summaryRowPolicy"))
+        assert_columns_declared(metadata, set(parsers.get(table_id, {})))
+        rows = apply_parsers(rows, parsers.get(table_id, {}))
+        column_map = normalize_union_column_map(entry.get("columnMap"), metadata, index)
+        selected_headers = list(column_map)
+        mapped_headers = list(column_map.values())
+        if len(set(mapped_headers)) != len(mapped_headers):
+            raise SpreadsheetError("spreadsheet_union_invalid", f"union.tables[{index}].columnMap 目标字段重复。", blocked=True)
+        mapped_types = {
+            column_map[item["name"]]: parser_output_type(parsers.get(table_id, {}).get(item["name"]), item["inferredType"])
+            for item in metadata["columns"]
+            if item["name"] in column_map
+        }
+        if canonical_headers is None:
+            canonical_headers = mapped_headers
+            canonical_types = mapped_types
+        elif set(mapped_headers) != set(canonical_headers):
+            raise SpreadsheetError(
+                "spreadsheet_union_schema_mismatch",
+                "union 各表映射后的字段集合不一致。",
+                {"tableId": table_id, "expected": canonical_headers, "actual": mapped_headers},
+                blocked=True,
+            )
+        else:
+            type_mismatches = [
+                {"column": name, "expected": canonical_types[name], "actual": mapped_types[name]}
+                for name in canonical_headers
+                if not compatible_union_types(canonical_types[name], mapped_types[name])
+            ]
+            if type_mismatches:
+                raise SpreadsheetError(
+                    "spreadsheet_union_schema_mismatch",
+                    "union 各表映射后的字段类型不一致；请使用 columnParsers 显式统一。",
+                    {"tableId": table_id, "columns": type_mismatches},
+                    blocked=True,
+                )
+        for row in rows:
+            combined_rows.append({target: row.get(source_name) for source_name, target in column_map.items()})
+        formula_columns.update(
+            column_map[name]
+            for name in metadata.get("formulaColumns") or []
+            if name in column_map
+        )
+        table_ids.append(table_id)
+        source_metadata.append(metadata)
+    synthetic_id = f"union-{hashlib.sha256(':'.join(table_ids).encode('utf8')).hexdigest()[:16]}"
+    metadata = {
+        "tableId": synthetic_id,
+        "headers": canonical_headers or [],
+        "columns": [
+            {"name": name, "inferredType": (canonical_types or {}).get(name, "empty")}
+            for name in canonical_headers or []
+        ],
+        "formulaColumns": sorted(formula_columns),
+        "summaryRows": [],
+        "sourceTables": [item["tableId"] for item in source_metadata],
+    }
+    return metadata, combined_rows, table_ids
+
+
+def normalize_union_column_map(value: Any, metadata: dict[str, Any], index: int) -> dict[str, str]:
+    headers = metadata.get("headers") or []
+    if value is None:
+        return {name: name for name in headers}
+    if not isinstance(value, dict) or not value:
+        raise SpreadsheetError("spreadsheet_union_invalid", f"union.tables[{index}].columnMap 必须是非空对象。", blocked=True)
+    output: dict[str, str] = {}
+    for source_name, target_name in value.items():
+        if not isinstance(source_name, str) or source_name not in headers:
+            raise SpreadsheetError("spreadsheet_column_not_found", f"union 来源字段不存在: {source_name}", {"tableId": metadata["tableId"]}, blocked=True)
+        output[source_name] = require_name(target_name, f"union.tables[{index}].columnMap.{source_name}")
+    return output
+
+
+def parser_output_type(parser: dict[str, Any] | None, inferred_type: str) -> str:
+    return parser["type"] if parser else inferred_type
+
+
+def compatible_union_types(left: str, right: str) -> bool:
+    if left == right:
+        return True
+    return {left, right} <= {"integer", "decimal", "number"}
+
+
 def normalize_parsers(value: Any, default_table_id: str) -> dict[str, dict[str, dict[str, Any]]]:
     if value is None:
         return {}
@@ -756,6 +1218,12 @@ def normalize_parsers(value: Any, default_table_id: str) -> dict[str, dict[str, 
         if not isinstance(parser, dict):
             raise SpreadsheetError("spreadsheet_parser_invalid", "columnParser 必须是对象。", blocked=True)
         table_id = parser.get("tableId") or default_table_id
+        if table_id is None:
+            raise SpreadsheetError(
+                "spreadsheet_parser_invalid",
+                "union 查询中的每个 columnParser 都必须明确提供 tableId。",
+                blocked=True,
+            )
         column = require_name(parser.get("column"), "columnParser.column")
         parser_type = parser.get("type")
         if parser_type not in {"decimal", "integer", "string", "date"}:
@@ -1086,14 +1554,14 @@ def assert_metric_operand(operand: Any, available_fields: set[str]) -> None:
 
 def validate_spreadsheet(workspace: Path, arguments: dict[str, Any]) -> dict[str, Any]:
     analysis_id = require_id(arguments.get("analysisId"), "analysisId", "analysis")
-    manifest, analysis_directory, source_path = load_analysis(workspace, analysis_id)
-    ensure_source_unchanged(manifest, source_path)
+    manifest, analysis_directory, source_paths = load_analysis(workspace, analysis_id)
+    ensure_sources_unchanged(manifest, source_paths)
     result_ids = normalize_string_list(arguments.get("resultIds"), "resultIds", maximum=100)
     results = {result_id: load_result(analysis_directory, analysis_id, result_id) for result_id in result_ids}
     checks = arguments.get("checks")
     if not isinstance(checks, list) or not checks or len(checks) > MAX_CHECKS:
         raise SpreadsheetError("spreadsheet_checks_invalid", f"checks 必须是 1-{MAX_CHECKS} 项数组。", blocked=True)
-    context = WorkbookContext(source_path, manifest)
+    context = WorkbookContext(source_paths, manifest)
     check_ids: set[str] = set()
     outcomes: list[dict[str, Any]] = []
     try:
@@ -1114,6 +1582,8 @@ def validate_spreadsheet(workspace: Path, arguments: dict[str, Any]) -> dict[str
                 outcome = validate_numeric_compare(results, check)
             elif check_type == "set_relation":
                 outcome = validate_set_relation(results, check)
+            elif check_type == "source_coverage":
+                outcome = validate_source_coverage(manifest, results, check)
             else:
                 raise SpreadsheetError("spreadsheet_check_invalid", f"不支持的 check.type: {check_type}", blocked=True)
             outcome.update({"id": check_id, "type": check_type, "required": required})
@@ -1121,7 +1591,7 @@ def validate_spreadsheet(workspace: Path, arguments: dict[str, Any]) -> dict[str
     finally:
         context.close()
 
-    ensure_source_unchanged(manifest, source_path)
+    ensure_sources_unchanged(manifest, source_paths)
     required_failures = [item for item in outcomes if item["required"] and item["status"] == "failed"]
     warnings = [item for item in outcomes if not item["required"] and item["status"] == "failed"]
     validation_status = "failed" if required_failures else "passed_with_warnings" if warnings else "passed"
@@ -1131,7 +1601,7 @@ def validate_spreadsheet(workspace: Path, arguments: dict[str, Any]) -> dict[str
         "analysisId": analysis_id,
         "validationId": validation_id,
         "createdAt": iso_now(),
-        "sourceHash": manifest["source"]["sha256"],
+        "sourceSetHash": manifest["sourceSetHash"],
         "resultIds": result_ids,
         "validationStatus": validation_status,
         "counts": {
@@ -1143,6 +1613,8 @@ def validate_spreadsheet(workspace: Path, arguments: dict[str, Any]) -> dict[str
         },
         "checks": outcomes,
     }
+    if len(manifest["sources"]) == 1:
+        report["sourceHash"] = manifest["sources"][0]["sha256"]
     validation_directory = ensure_safe_directory(analysis_directory, "validations")
     report_path = validation_directory / f"{validation_id}.json"
     atomic_write_json(report_path, report)
@@ -1352,6 +1824,108 @@ def validate_set_relation(results: dict[str, dict[str, Any]], check: dict[str, A
     }
 
 
+def validate_source_coverage(manifest: dict[str, Any], results: dict[str, dict[str, Any]], check: dict[str, Any]) -> dict[str, Any]:
+    allowed = {
+        "id",
+        "type",
+        "required",
+        "resultIds",
+        "requireAllSourcesAccountedFor",
+        "allowFailedSources",
+        "allowUnresolvedDuplicates",
+        "allowUnresolvedOverlaps",
+    }
+    if set(check) - allowed:
+        raise SpreadsheetError("spreadsheet_check_invalid", "source_coverage 包含不支持字段。", blocked=True)
+    selected_ids = normalize_string_list(check.get("resultIds"), "source_coverage.resultIds", maximum=100)
+    if not selected_ids:
+        selected_ids = list(results)
+    selected = [require_result(results, result_id) for result_id in selected_ids]
+    used_source_ids: set[str] = set()
+    used_table_ids: set[str] = set()
+    decisions: dict[str, dict[str, Any]] = {}
+    for result in selected:
+        lineage = result["manifest"].get("lineage") or {}
+        used_source_ids.update(
+            source.get("sourceId")
+            for source in lineage.get("sources") or []
+            if source.get("sourceId")
+        )
+        used_table_ids.update(result["manifest"].get("tableIds") or [])
+        for decision in result["manifest"].get("sourceDecisions") or lineage.get("sourceDecisions") or []:
+            if decision.get("sourceId"):
+                previous = decisions.get(decision["sourceId"])
+                if previous and previous != decision:
+                    raise SpreadsheetError(
+                        "spreadsheet_source_decisions_conflict",
+                        "被校验结果包含互相冲突的来源决定。",
+                        {"sourceId": decision["sourceId"], "decisions": [previous, decision]},
+                        blocked=True,
+                    )
+                decisions[decision["sourceId"]] = decision
+    known_source_ids = {source["sourceId"] for source in manifest["sources"]}
+    excluded_source_ids = {
+        source_id for source_id, decision in decisions.items()
+        if decision.get("action") == "exclude"
+    }
+    included_but_unused = sorted(
+        source_id for source_id, decision in decisions.items()
+        if decision.get("action") == "include" and source_id not in used_source_ids
+    )
+    excluded_but_used = sorted(excluded_source_ids & used_source_ids)
+    unaccounted = sorted(known_source_ids - used_source_ids - excluded_source_ids)
+    unresolved_duplicates = [
+        group for group in manifest.get("duplicateGroups") or []
+        if (
+            len(set(group.get("sourceIds") or []) & used_source_ids) > 1
+            if group.get("type") == "identical_file"
+            else len(set(group.get("tableIds") or []) & used_table_ids) > 1
+        )
+    ]
+    unresolved_overlaps = [
+        candidate for candidate in manifest.get("overlapCandidates") or []
+        if set(candidate.get("tableIds") or []) <= used_table_ids
+    ]
+    failed_sources = [
+        source for source in manifest.get("failedSources") or []
+        if source.get("sourceId") not in excluded_source_ids
+    ]
+    require_all = require_optional_boolean(check, "requireAllSourcesAccountedFor", True)
+    allow_failed = require_optional_boolean(check, "allowFailedSources", False)
+    allow_duplicates = require_optional_boolean(check, "allowUnresolvedDuplicates", False)
+    allow_overlaps = require_optional_boolean(check, "allowUnresolvedOverlaps", False)
+    violations = []
+    if require_all and unaccounted:
+        violations.append({"code": "unaccounted_sources", "sourceIds": unaccounted})
+    if included_but_unused:
+        violations.append({"code": "included_sources_not_used", "sourceIds": included_but_unused})
+    if excluded_but_used:
+        violations.append({"code": "excluded_sources_used", "sourceIds": excluded_but_used})
+    if failed_sources and not allow_failed:
+        violations.append({"code": "failed_sources", "sources": failed_sources})
+    if unresolved_duplicates and not allow_duplicates:
+        violations.append({"code": "unresolved_duplicates", "groups": unresolved_duplicates})
+    if unresolved_overlaps and not allow_overlaps:
+        violations.append({"code": "unresolved_overlaps", "candidates": unresolved_overlaps})
+    return {
+        "status": "failed" if violations else "passed",
+        "resultIds": selected_ids,
+        "knownSourceCount": len(known_source_ids),
+        "usedSourceIds": sorted(used_source_ids),
+        "excludedSourceIds": sorted(excluded_source_ids),
+        "unaccountedSourceIds": unaccounted,
+        "violations": violations,
+    }
+
+
+def require_optional_boolean(value: dict[str, Any], name: str, default: bool) -> bool:
+    if name not in value:
+        return default
+    if not isinstance(value[name], bool):
+        raise SpreadsheetError("spreadsheet_check_invalid", f"{name} 必须是布尔值。", blocked=True)
+    return value[name]
+
+
 def evaluate_expression(results: dict[str, dict[str, Any]], expression: Any, depth: int = 0) -> Decimal:
     if depth > 12 or not isinstance(expression, dict):
         raise SpreadsheetError("spreadsheet_expression_invalid", "数值表达式结构无效。", blocked=True)
@@ -1400,7 +1974,7 @@ def evaluate_set_operand(results: dict[str, dict[str, Any]], operand: Any) -> se
     return {str(row[field]) for row in result["data"]["rows"] if row.get(field) not in (None, "")}
 
 
-def load_analysis(workspace: Path, analysis_id: str) -> tuple[dict[str, Any], Path, Path]:
+def load_analysis(workspace: Path, analysis_id: str) -> tuple[dict[str, Any], Path, dict[str, Path]]:
     expected_directory = workspace / "temp" / "spreadsheets" / analysis_id
     try:
         analysis_directory = expected_directory.resolve(strict=True)
@@ -1411,10 +1985,46 @@ def load_analysis(workspace: Path, analysis_id: str) -> tuple[dict[str, Any], Pa
         raise SpreadsheetError("spreadsheet_analysis_invalid", "表格分析路径不是目录。", blocked=True)
     manifest_path = analysis_directory / "manifest.json"
     manifest = read_json(manifest_path, "spreadsheet_analysis_not_found", "找不到表格分析记录。")
-    if manifest.get("schemaVersion") != "agent-spreadsheet.analysis.v1" or manifest.get("analysisId") != analysis_id:
+    if manifest.get("schemaVersion") not in {"agent-spreadsheet.analysis.v1", "agent-spreadsheet.analysis.v2"} or manifest.get("analysisId") != analysis_id:
         raise SpreadsheetError("spreadsheet_analysis_invalid", "表格分析 manifest 无效。", blocked=True)
-    source_path = resolve_source_path(workspace, manifest.get("source", {}).get("path"))
-    return manifest, analysis_directory, source_path
+    manifest = normalize_analysis_manifest(manifest)
+    source_paths = {
+        source["sourceId"]: resolve_source_path(workspace, source.get("path"))
+        for source in manifest["sources"]
+    }
+    return manifest, analysis_directory, source_paths
+
+
+def normalize_analysis_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
+    if manifest.get("schemaVersion") == "agent-spreadsheet.analysis.v2":
+        if not isinstance(manifest.get("sources"), list) or not manifest["sources"]:
+            raise SpreadsheetError("spreadsheet_analysis_invalid", "多来源分析缺少 sources。", blocked=True)
+        return manifest
+    source = dict(manifest.get("source") or {})
+    if not source.get("path") or not source.get("sha256"):
+        raise SpreadsheetError("spreadsheet_analysis_invalid", "旧版分析缺少 source。", blocked=True)
+    source_id = create_source_id(source["path"], source["sha256"])
+    source.update({
+        "sourceId": source_id,
+        "status": "ready",
+        "sheetCount": len(manifest.get("sheets") or []),
+        "tableCount": len(manifest.get("tables") or []),
+    })
+    normalized = dict(manifest)
+    normalized["sourceSetHash"] = source["sha256"]
+    normalized["sources"] = [source]
+    normalized["duplicateGroups"] = []
+    normalized["overlapCandidates"] = []
+    normalized["failedSources"] = []
+    normalized["sheets"] = [
+        {**sheet, "sourceId": source_id, "sourcePath": source["path"]}
+        for sheet in manifest.get("sheets") or []
+    ]
+    normalized["tables"] = [
+        {**table, "sourceId": source_id, "sourcePath": source["path"]}
+        for table in manifest.get("tables") or []
+    ]
+    return normalized
 
 
 def table_lineage(manifest: dict[str, Any], table_id: str) -> dict[str, Any]:
@@ -1423,11 +2033,30 @@ def table_lineage(manifest: dict[str, Any], table_id: str) -> dict[str, Any]:
         raise SpreadsheetError("spreadsheet_table_not_found", f"找不到 tableId: {table_id}", blocked=True)
     return {
         "tableId": table_id,
+        "sourceId": table.get("sourceId"),
+        "sourcePath": table.get("sourcePath"),
         "sheet": table.get("sheet"),
         "range": table.get("range"),
         "kind": table.get("kind"),
         "declaredName": table.get("declaredName"),
     }
+
+
+def result_source_lineage(manifest: dict[str, Any], table_ids: list[str]) -> list[dict[str, Any]]:
+    source_ids = {
+        table.get("sourceId")
+        for table in manifest.get("tables") or []
+        if table.get("tableId") in table_ids
+    }
+    return [
+        {
+            "sourceId": source["sourceId"],
+            "path": source["path"],
+            "sha256": source["sha256"],
+        }
+        for source in manifest["sources"]
+        if source["sourceId"] in source_ids
+    ]
 
 
 def load_result(analysis_directory: Path, analysis_id: str, result_id: str) -> dict[str, Any]:
@@ -1468,14 +2097,24 @@ def require_result(results: dict[str, dict[str, Any]], result_id: Any) -> dict[s
     return result
 
 
-def ensure_source_unchanged(manifest: dict[str, Any], source_path: Path) -> None:
-    current_hash = hash_file(source_path)
-    expected_hash = manifest["source"]["sha256"]
-    if current_hash != expected_hash:
+def ensure_sources_unchanged(manifest: dict[str, Any], source_paths: dict[str, Path]) -> None:
+    changed = []
+    for source in manifest["sources"]:
+        source_id = source["sourceId"]
+        source_path = source_paths[source_id]
+        current_hash = hash_file(source_path)
+        if current_hash != source["sha256"]:
+            changed.append({
+                "sourceId": source_id,
+                "path": source["path"],
+                "expectedHash": source["sha256"],
+                "actualHash": current_hash,
+            })
+    if changed:
         raise SpreadsheetError(
             "spreadsheet_source_changed",
-            "源表格在 inspect 后发生变化，请重新执行 spreadsheet_inspect。",
-            {"expectedHash": expected_hash, "actualHash": current_hash},
+            "来源集合在 inspect 后发生变化，请重新执行 spreadsheet_inspect。",
+            {"sources": changed},
             blocked=True,
         )
 
@@ -1884,6 +2523,8 @@ def public_table_summary(table: dict[str, Any]) -> dict[str, Any]:
         columns.append(profile)
     summary = {
         "tableId": table["tableId"],
+        "sourceId": table.get("sourceId"),
+        "sourcePath": table.get("sourcePath"),
         "sheet": table["sheet"],
         "range": table["range"],
         "kind": table["kind"],
@@ -1911,7 +2552,14 @@ def public_table_summary(table: dict[str, Any]) -> dict[str, Any]:
 
 
 def compact_result_preview(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return [compact_row(row, 20) for row in rows[:3]]
+    selected = rows[:MAX_PUBLIC_PREVIEW_ROWS]
+    if not selected:
+        return []
+    maximum_columns = min(
+        MAX_PUBLIC_PREVIEW_COLUMNS,
+        max(1, MAX_PUBLIC_PREVIEW_CELLS // len(selected)),
+    )
+    return [compact_row(row, maximum_columns) for row in selected]
 
 
 def compact_row(row: dict[str, Any], maximum_columns: int) -> dict[str, Any]:

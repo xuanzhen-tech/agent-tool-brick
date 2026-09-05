@@ -14,7 +14,7 @@ import { fileURLToPath } from "node:url";
 import { runProcess } from "./process-runtime.mjs";
 
 const WORKER_PATH = fileURLToPath(new URL("./spreadsheet-worker.py", import.meta.url));
-const WORKER_TIMEOUT_MS = 120_000;
+const WORKER_TIMEOUT_MS = 300_000;
 const WORKER_OUTPUT_BYTES = 2 * 1024 * 1024;
 const ID_PATTERN = /^(?:analysis|result|validation)-[a-z0-9-]{8,80}$/;
 const DATA_REF_SCHEMA_VERSION = "agent-spreadsheet.data-ref.v1";
@@ -30,6 +30,8 @@ export async function executeSpreadsheetInspect(call, config, signal) {
       analysisId: summary.analysisId,
       inspectionStatus: summary.inspectionStatus,
       source: summary.source,
+      sources: summary.sources,
+      failedSources: summary.failedSources,
       warnings: summary.warnings,
       guidance: summary.guidance
     };
@@ -47,23 +49,60 @@ export async function executeSpreadsheetInspect(call, config, signal) {
   }
   return {
     status: "completed",
-    content: JSON.stringify({
-      analysisId: summary.analysisId,
-      inspectionStatus: summary.inspectionStatus,
-      source: summary.source,
-      sheets: summary.sheets,
-      tables: summary.tables,
-      warnings: summary.warnings,
-      guidance: summary.guidance
-    }),
+    content: JSON.stringify(compactInspectionContent(summary)),
     details: {
       analysisId: summary.analysisId,
       inspectionStatus: summary.inspectionStatus,
       manifestPath: summary.manifestPath,
       tableCount: summary.tables.length,
+      sourceCount: summary.sources?.length ?? (summary.source ? 1 : 0),
       warningCount: summary.warnings.length
     }
   };
+}
+
+function compactInspectionContent(summary) {
+  const multipleSources = (summary.sources?.length ?? 0) > 1;
+  const content = {
+      analysisId: summary.analysisId,
+      inspectionStatus: summary.inspectionStatus,
+      sheets: summary.sheets.map((sheet) => compactSheetSummary(sheet, multipleSources)),
+      tables: multipleSources ? summary.tables : summary.tables.map(withoutSourceIdentity),
+      warnings: summary.warnings,
+      guidance: summary.guidance
+  };
+  if (multipleSources) {
+    content.sourceSetHash = summary.sourceSetHash;
+    content.sources = summary.sources;
+  }
+  else {
+    content.source = withoutSourceIdentity(summary.source ?? summary.sources?.[0] ?? {});
+    content.guidance = summary.inspectionStatus === "needs_selection"
+      ? "当前分析只有一个来源，无需 sourceDecisions；必须明确选择 tableId。"
+      : "当前分析只有一个来源，无需 sourceDecisions；请直接使用 tableId。";
+  }
+  if (summary.duplicateGroups?.length) content.duplicateGroups = summary.duplicateGroups;
+  if (summary.overlapCandidates?.length) content.overlapCandidates = summary.overlapCandidates;
+  if (summary.failedSources?.length) content.failedSources = summary.failedSources;
+  return content;
+}
+
+function withoutSourceIdentity(value) {
+  const {
+    sourceId: _sourceId,
+    sourcePath: _sourcePath,
+    sourceSetHash: _sourceSetHash,
+    schemaFingerprint: _schemaFingerprint,
+    contentHash: _contentHash,
+    dateRanges: _dateRanges,
+    ...rest
+  } = value;
+  return rest;
+}
+
+function compactSheetSummary(sheet, keepSourceIdentity) {
+  const value = keepSourceIdentity ? sheet : withoutSourceIdentity(sheet);
+  return Object.fromEntries(Object.entries(value).filter(([, item]) => !Array.isArray(item) || item.length > 0));
 }
 
 export async function executeSpreadsheetCompute(call, config, signal) {
@@ -180,6 +219,8 @@ export async function resolveSpreadsheetDataRef(workspace, input) {
       resultId: ref.resultId,
       queryId: manifest.queryId,
       sourceHash: manifest.sourceHash,
+      sourceSetHash: manifest.sourceSetHash ?? manifest.sourceHash,
+      sources: manifest.lineage?.sources ?? [],
       dataHash: manifest.dataHash,
       lineage: manifest.lineage
     }
@@ -243,7 +284,7 @@ async function runSpreadsheetWorker(action, call, config, signal) {
     return { ok: false, error: { code: "spreadsheet_interrupted", message: "表格操作已中断。", interrupted: true } };
   }
   if (result.timedOut) {
-    return { ok: false, error: { code: "spreadsheet_timeout", message: "表格操作超过 120 秒限制。" } };
+    return { ok: false, error: { code: "spreadsheet_timeout", message: "表格操作超过 5 分钟限制。" } };
   }
   if (result.exitCode !== 0) {
     return {

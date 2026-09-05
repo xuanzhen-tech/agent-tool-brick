@@ -1,6 +1,6 @@
 {
   "name": "@xuanzhen-tech/agent-tool-brick",
-  "version": "0.16.0",
+  "version": "0.17.0",
   "description": "Agent tool execution brick with a local tool service boundary.",
   "type": "module",
   "repository": {
@@ -54,6 +54,7 @@
     "smoke:agent-cli-integration": "node scripts/smoke-visualization-agent-integration.mjs",
     "smoke:agent-cli-spreadsheet-real": "node scripts/smoke-spreadsheet-agent-real.mjs",
     "smoke:agent-cli-spreadsheet-integration": "node scripts/smoke-spreadsheet-agent-integration.mjs",
+    "eval:spreadsheets:ab": "node scripts/run-spreadsheet-agent-ab-eval.mjs",
     "smoke:tools": "node src/scripts/smoke-tools.mjs",
     "smoke:tool-results": "node src/scripts/smoke-tool-results.mjs",
     "smoke:visualizations": "node src/scripts/smoke-visualizations.mjs",
